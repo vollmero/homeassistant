@@ -1,0 +1,615 @@
+#############################################
+# Paket: BZ – Waschmaschine (V2.1)
+#
+# Steckdose: switch.bz_waschmaschine_01
+# Sensoren:  sensor.bz_waschmaschine_01_leistung
+#            sensor.bz_waschmaschine_01_summe_verbraucht
+#
+# Notify:    notify.mobile_app_iphone_15_pro_max_von_oliver
+#            notify.mobile_app_iphone_weini
+#
+# Änderungen V2.1:
+# 9. Nachtabschaltung – Steckdose zeitgesteuert aus/ein
+#    (nur wenn kein Waschgang läuft)
+#
+# Enthält aus V2.0:
+# 1. Konfigurierbare Schwellenwerte (Start/Ende Watt)
+# 2. Laufzeit-Erfassung pro Waschgang
+# 3. Kostenberechnung mit einstellbarem Strompreis
+# 5. Robuste Persistenz (unknown/unavailable-Handling)
+# 6. Watchdog bei Sensorausfall (6h Timeout)
+# 7. Durchschnittsverbrauch pro Waschgang
+# 8. Reichhaltigere Benachrichtigungen
+#############################################
+
+
+#######################
+# Helfer
+#######################
+
+input_boolean:
+  bz_waschmaschine_running:
+    name: BZ WM läuft
+    icon: mdi:washing-machine
+
+  # Nachtabschaltung (Punkt 9)
+  bz_waschmaschine_nacht_aktiv:
+    name: BZ WM Nachtabschaltung aktiv
+    icon: mdi:power-sleep
+
+input_number:
+  # Konfigurierbare Schwellenwerte (Punkt 1)
+  bz_waschmaschine_start_schwelle:
+    name: BZ WM Startschwelle
+    min: 1
+    max: 50
+    step: 1
+    unit_of_measurement: "W"
+    mode: slider
+
+  bz_waschmaschine_ende_schwelle:
+    name: BZ WM Endeschwelle
+    min: 0
+    max: 20
+    step: 0.5
+    unit_of_measurement: "W"
+    mode: slider
+
+  # Messwerte
+  bz_waschmaschine_last_cycle_start_kwh:
+    name: BZ WM Startstand kWh
+    min: 0
+    max: 99999
+    step: 0.001
+    mode: box
+    unit_of_measurement: "kWh"
+
+  bz_waschmaschine_last_cycle_kwh:
+    name: BZ WM letzter Verbrauch
+    min: 0
+    max: 50
+    step: 0.01
+    mode: box
+    unit_of_measurement: "kWh"
+
+  # Laufzeit (Punkt 2)
+  bz_waschmaschine_last_cycle_minutes:
+    name: BZ WM letzte Laufzeit
+    min: 0
+    max: 600
+    step: 1
+    mode: box
+    unit_of_measurement: "min"
+
+# Startzeit für Laufzeit-Berechnung (Punkt 2)
+# Nachtabschaltung Zeitfenster (Punkt 9)
+input_datetime:
+  bz_waschmaschine_start_zeit:
+    name: BZ WM Startzeit
+    has_date: true
+    has_time: true
+
+  bz_waschmaschine_nacht_start:
+    name: BZ WM Nacht Start
+    has_date: false
+    has_time: true
+    icon: mdi:weather-night
+
+  bz_waschmaschine_nacht_ende:
+    name: BZ WM Nacht Ende
+    has_date: false
+    has_time: true
+    icon: mdi:weather-sunset-up
+
+counter:
+  bz_waschmaschine_runs_total:
+    name: BZ WM Läufe gesamt
+    initial: 0
+    step: 1
+    icon: mdi:counter
+
+# Watchdog-Timer (Punkt 6)
+timer:
+  bz_waschmaschine_watchdog:
+    name: BZ WM Watchdog
+    duration: "06:00:00"
+    restore: true
+
+
+#######################
+# Verbrauchszähler
+#######################
+
+utility_meter:
+  # kWh-Verbrauch
+  bz_waschmaschine_kwh_week:
+    source: sensor.bz_waschmaschine_01_summe_verbraucht
+    cycle: weekly
+
+  bz_waschmaschine_kwh_month:
+    source: sensor.bz_waschmaschine_01_summe_verbraucht
+    cycle: monthly
+
+  bz_waschmaschine_kwh_year:
+    source: sensor.bz_waschmaschine_01_summe_verbraucht
+    cycle: yearly
+
+  # Anzahl Waschgänge
+  bz_waschmaschine_runs_week:
+    source: counter.bz_waschmaschine_runs_total
+    cycle: weekly
+
+  bz_waschmaschine_runs_month:
+    source: counter.bz_waschmaschine_runs_total
+    cycle: monthly
+
+  bz_waschmaschine_runs_year:
+    source: counter.bz_waschmaschine_runs_total
+    cycle: yearly
+
+
+#######################
+# Template-Sensoren
+#######################
+
+template:
+  - binary_sensor:
+      # Nachtabschaltung Zeitfenster (Punkt 9)
+      - name: "BZ WM Nachtzeit aktiv"
+        unique_id: bz_wm_nachtzeit_aktiv
+        icon: >
+          {% if is_state('binary_sensor.bz_wm_nachtzeit_aktiv','on') %}
+            mdi:weather-night
+          {% else %}
+            mdi:weather-sunset-up
+          {% endif %}
+        state: >
+          {% set start = states('input_datetime.bz_waschmaschine_nacht_start')[0:5] %}
+          {% set end = states('input_datetime.bz_waschmaschine_nacht_ende')[0:5] %}
+          {% set now_t = now().strftime('%H:%M') %}
+          {% if not start or not end %}
+            {{ false }}
+          {% elif start < end %}
+            {{ start <= now_t and now_t < end }}
+          {% else %}
+            {{ now_t >= start or now_t < end }}
+          {% endif %}
+
+  - sensor:
+      # Letzter Waschgang – Verbrauch (Punkt 5: robust gegen unavailable)
+      - name: "BZ WM letzter Waschgang Verbrauch"
+        unique_id: bz_wm_letzter_waschgang_verbrauch
+        unit_of_measurement: "kWh"
+        icon: mdi:flash
+        state: >
+          {% set v = states('input_number.bz_waschmaschine_last_cycle_kwh') %}
+          {{ 0 if v in ['unknown','unavailable','none'] else v | float(0) | round(2) }}
+
+      # Letzter Waschgang – Kosten (Punkt 3)
+      - name: "BZ WM letzter Waschgang Kosten"
+        unique_id: bz_wm_letzter_waschgang_kosten
+        unit_of_measurement: "€"
+        icon: mdi:currency-eur
+        state: >
+          {% set kwh = states('input_number.bz_waschmaschine_last_cycle_kwh') | float(0) %}
+          {% set preis = states('sensor.globaler_strompreis_aktuell') | float(0.30) %}
+          {{ (kwh * preis) | round(2) }}
+
+      # Letzter Waschgang – Dauer (Punkt 2)
+      - name: "BZ WM letzter Waschgang Dauer"
+        unique_id: bz_wm_letzter_waschgang_dauer
+        unit_of_measurement: "min"
+        icon: mdi:timer-outline
+        state: >
+          {% set v = states('input_number.bz_waschmaschine_last_cycle_minutes') %}
+          {{ 0 if v in ['unknown','unavailable','none'] else v | int(0) }}
+
+      # Durchschnittsverbrauch pro Waschgang – Jahresbasis (Punkt 7)
+      - name: "BZ WM Durchschnittsverbrauch"
+        unique_id: bz_wm_durchschnittsverbrauch
+        unit_of_measurement: "kWh"
+        icon: mdi:chart-line
+        state: >
+          {% set kwh = states('sensor.bz_waschmaschine_kwh_year') | float(0) %}
+          {% set runs = states('sensor.bz_waschmaschine_runs_year') | float(0) %}
+          {% if runs > 0 %}
+            {{ (kwh / runs) | round(2) }}
+          {% else %}
+            0
+          {% endif %}
+
+      # Läufe gesamt
+      - name: "BZ WM Läufe gesamt"
+        unique_id: bz_waschmaschine_runs_total_sensor
+        unit_of_measurement: "Waschgänge"
+        icon: mdi:counter
+        state: >
+          {{ states('counter.bz_waschmaschine_runs_total') | int(0) }}
+
+      # Anzeige-Sensoren (Punkt 5: 0 statt unknown)
+      - name: "BZ WM Waschgänge Woche"
+        unique_id: bz_waschmaschine_runs_week_display
+        unit_of_measurement: "Waschgänge"
+        icon: mdi:poll
+        state: >
+          {% set v = states('sensor.bz_waschmaschine_runs_week') %}
+          {{ 0 if v in ['unknown','unavailable','none'] else v | int(0) }}
+
+      - name: "BZ WM Waschgänge Monat"
+        unique_id: bz_waschmaschine_runs_month_display
+        unit_of_measurement: "Waschgänge"
+        icon: mdi:poll
+        state: >
+          {% set v = states('sensor.bz_waschmaschine_runs_month') %}
+          {{ 0 if v in ['unknown','unavailable','none'] else v | int(0) }}
+
+      - name: "BZ WM Waschgänge Jahr"
+        unique_id: bz_waschmaschine_runs_year_display
+        unit_of_measurement: "Waschgänge"
+        icon: mdi:poll
+        state: >
+          {% set v = states('sensor.bz_waschmaschine_runs_year') %}
+          {{ 0 if v in ['unknown','unavailable','none'] else v | int(0) }}
+
+
+#######################
+# Automationen
+#######################
+
+automation:
+
+  #############################################
+  # 1) Start-Erkennung Waschgang
+  #############################################
+  - id: bz_waschmaschine_start
+    alias: BZ – Waschmaschine Start erkannt
+    description: >
+      Erkennt Waschgang-Start über konfigurierbaren Schwellenwert.
+      Speichert Startstand kWh und Startzeit, startet Watchdog.
+    mode: restart
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.bz_waschmaschine_01_leistung
+        above: input_number.bz_waschmaschine_start_schwelle
+        for: "00:02:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.bz_waschmaschine_running
+        state: "off"
+    action:
+      # Running-Flag setzen
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.bz_waschmaschine_running
+
+      # Startstand kWh merken
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.bz_waschmaschine_last_cycle_start_kwh
+        data:
+          value: >
+            {{ states('sensor.bz_waschmaschine_01_summe_verbraucht') | float(0) }}
+
+      # Startzeit merken (Punkt 2)
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.bz_waschmaschine_start_zeit
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+      # Watchdog-Timer starten (Punkt 6)
+      - service: timer.start
+        target:
+          entity_id: timer.bz_waschmaschine_watchdog
+
+
+  #############################################
+  # 2) Ende-Erkennung + Benachrichtigungen
+  #############################################
+  - id: bz_waschmaschine_fertig
+    alias: BZ – Waschmaschine fertig
+    description: >
+      Erkennt Waschgang-Ende, berechnet Verbrauch, Kosten und Dauer,
+      vergleicht mit Durchschnitt und sendet Benachrichtigungen.
+    mode: restart
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.bz_waschmaschine_01_leistung
+        below: input_number.bz_waschmaschine_ende_schwelle
+        for: "00:10:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.bz_waschmaschine_running
+        state: "on"
+    action:
+      # ── Schritt 1: Rohdaten sammeln ──
+      - variables:
+          start_kwh: "{{ states('input_number.bz_waschmaschine_last_cycle_start_kwh') | float(0) }}"
+          end_kwh: "{{ states('sensor.bz_waschmaschine_01_summe_verbraucht') | float(0) }}"
+          strompreis: "{{ states('sensor.globaler_strompreis_aktuell') | float(0.30) }}"
+          start_zeit: "{{ states('input_datetime.bz_waschmaschine_start_zeit') }}"
+          avg_kwh_year: "{{ states('sensor.bz_waschmaschine_kwh_year') | float(0) }}"
+          runs_year: "{{ states('sensor.bz_waschmaschine_runs_year') | float(0) }}"
+
+      # ── Schritt 2: Berechnungen ──
+      - variables:
+          verbrauch_kwh: >
+            {% set diff = (end_kwh | float(0)) - (start_kwh | float(0)) %}
+            {{ (diff if diff >= 0 else 0) | round(2) }}
+          dauer_min: >
+            {% if start_zeit not in ['unknown','unavailable','none'] %}
+              {{ ((as_timestamp(now()) - as_timestamp(start_zeit)) / 60) | round(0) }}
+            {% else %}
+              0
+            {% endif %}
+          kosten_euro: >
+            {% set diff = (end_kwh | float(0)) - (start_kwh | float(0)) %}
+            {% set kwh = diff if diff >= 0 else 0 %}
+            {{ (kwh * (strompreis | float(0.30))) | round(2) }}
+          durchschnitt_kwh: >
+            {% if (runs_year | float(0)) > 0 %}
+              {{ ((avg_kwh_year | float(0)) / (runs_year | float(1))) | round(2) }}
+            {% else %}
+              0
+            {% endif %}
+
+      # ── Schritt 3: Texte formatieren ──
+      - variables:
+          dauer_text: >
+            {% set m = dauer_min | int(0) %}
+            {% if m >= 60 %}
+              {{ (m // 60) }}h {{ (m % 60) }}min
+            {% else %}
+              {{ m }}min
+            {% endif %}
+          vergleich_text: >
+            {% set avg = durchschnitt_kwh | float(0) %}
+            {% set vkwh = verbrauch_kwh | float(0) %}
+            {% if avg > 0 and vkwh > 0 %}
+              {% set diff_pct = ((vkwh - avg) / avg * 100) | round(0) %}
+              {% if diff_pct > 5 %}
+                ↑ {{ diff_pct }}% über Ø ({{ avg }} kWh)
+              {% elif diff_pct < -5 %}
+                ↓ {{ diff_pct | abs }}% unter Ø ({{ avg }} kWh)
+              {% else %}
+                ≈ im Durchschnitt ({{ avg }} kWh)
+              {% endif %}
+            {% else %}
+              noch kein Vergleich möglich
+            {% endif %}
+
+      # ── Werte speichern ──
+
+      # Verbrauch speichern
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.bz_waschmaschine_last_cycle_kwh
+        data:
+          value: "{{ verbrauch_kwh }}"
+
+      # Laufzeit speichern (Punkt 2)
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.bz_waschmaschine_last_cycle_minutes
+        data:
+          value: "{{ dauer_min | int(0) }}"
+
+      # Lauf hochzählen
+      - service: counter.increment
+        target:
+          entity_id: counter.bz_waschmaschine_runs_total
+
+      # Running-Flag zurücksetzen
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.bz_waschmaschine_running
+
+      # Watchdog stoppen (Punkt 6)
+      - service: timer.cancel
+        target:
+          entity_id: timer.bz_waschmaschine_watchdog
+
+      # ── Benachrichtigungen (Punkt 8) ──
+
+      # Push an Oliver
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "🧺 Waschmaschine fertig!"
+          message: >
+            ⏱ Dauer: {{ dauer_text }}
+            ⚡ Verbrauch: {{ verbrauch_kwh }} kWh
+            💰 Kosten: ca. {{ kosten_euro }} €
+            📊 {{ vergleich_text }}
+          data:
+            tag: bz_waschmaschine_fertig
+
+      # Push an Weini
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "🧺 Waschmaschine fertig!"
+          message: >
+            ⏱ Dauer: {{ dauer_text }}
+            ⚡ Verbrauch: {{ verbrauch_kwh }} kWh
+            💰 Kosten: ca. {{ kosten_euro }} €
+            📊 {{ vergleich_text }}
+          data:
+            tag: bz_waschmaschine_fertig
+
+      # HA Notification
+      - service: persistent_notification.create
+        data:
+          title: "🧺 BZ – Waschmaschine fertig"
+          message: >
+            ⏱ Dauer: {{ dauer_text }}
+            ⚡ Verbrauch: {{ verbrauch_kwh }} kWh
+            💰 Kosten: ca. {{ kosten_euro }} €
+            📊 {{ vergleich_text }}
+          notification_id: bz_waschmaschine_fertig
+
+
+  #############################################
+  # 3) Watchdog – Sicherheits-Reset (Punkt 6)
+  #############################################
+  - id: bz_waschmaschine_watchdog_reset
+    alias: BZ – Waschmaschine Watchdog Reset
+    description: >
+      Setzt den Lauf-Status nach 6 Stunden automatisch zurück.
+      Schützt vor "hängendem" Status bei Sensorausfall.
+    mode: single
+    trigger:
+      - platform: event
+        event_type: timer.finished
+        event_data:
+          entity_id: timer.bz_waschmaschine_watchdog
+    condition:
+      - condition: state
+        entity_id: input_boolean.bz_waschmaschine_running
+        state: "on"
+    action:
+      # Running-Flag zurücksetzen
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.bz_waschmaschine_running
+
+      # Warnung an Oliver
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "⚠️ Waschmaschine Watchdog"
+          message: >
+            Der Waschgang wurde nach 6 Stunden automatisch
+            als beendet markiert.
+            Mögliche Ursache: Sensorausfall oder untypisch
+            langer Waschgang. Bitte prüfen.
+          data:
+            tag: bz_waschmaschine_watchdog
+
+      # HA Notification
+      - service: persistent_notification.create
+        data:
+          title: "⚠️ BZ – Waschmaschine Watchdog"
+          message: >
+            Der Waschgang wurde nach 6 Stunden automatisch
+            als beendet markiert.
+            Mögliche Ursache: Sensorausfall oder untypisch
+            langer Waschgang.
+          notification_id: bz_waschmaschine_watchdog
+
+
+  #############################################
+  # 4) Nachtabschaltung – Steckdose AUS (Punkt 9)
+  #############################################
+  - id: bz_waschmaschine_nacht_aus
+    alias: BZ – Waschmaschine Nacht AUS
+    description: >
+      Schaltet die Steckdose aus, wenn das Nacht-Zeitfenster beginnt.
+      Nur wenn kein Waschgang läuft und Nachtabschaltung aktiv ist.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.bz_wm_nachtzeit_aktiv
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: input_boolean.bz_waschmaschine_nacht_aktiv
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.bz_waschmaschine_running
+        state: "off"
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.bz_waschmaschine_01
+
+
+  #############################################
+  # 5) Nachtabschaltung – Steckdose EIN (Punkt 9)
+  #############################################
+  - id: bz_waschmaschine_nacht_ein
+    alias: BZ – Waschmaschine Nacht EIN
+    description: >
+      Schaltet die Steckdose wieder ein, wenn das Nacht-Zeitfenster endet.
+      Nur wenn Nachtabschaltung aktiv ist.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.bz_wm_nachtzeit_aktiv
+        to: "off"
+    condition:
+      - condition: state
+        entity_id: input_boolean.bz_waschmaschine_nacht_aktiv
+        state: "on"
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.bz_waschmaschine_01
+
+
+  #############################################
+  # 6) Nachtabschaltung – Waschgang endet in Nacht (Punkt 9)
+  #############################################
+  - id: bz_waschmaschine_nacht_nach_waschgang
+    alias: BZ – Waschmaschine Nacht nach Waschgang AUS
+    description: >
+      Wenn ein Waschgang während der Nachtzeit endet,
+      wird die Steckdose danach ausgeschaltet.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: input_boolean.bz_waschmaschine_running
+        from: "on"
+        to: "off"
+    condition:
+      - condition: state
+        entity_id: input_boolean.bz_waschmaschine_nacht_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.bz_wm_nachtzeit_aktiv
+        state: "on"
+    action:
+      # Kurz warten, damit die Fertig-Notification noch rausgeht
+      - delay:
+          seconds: 30
+      - service: switch.turn_off
+        target:
+          entity_id: switch.bz_waschmaschine_01
+# ==========================================================================
+  # Neuer Waschgang -> alte Benachrichtigungen loeschen
+  # ==========================================================================
+  - id: bz_waschmaschine_dismiss
+    alias: BZ - Waschmaschine Benachrichtigungen loeschen
+    description: >
+      Wenn ein neuer Waschgang startet, die alten Fertig- und
+      Watchdog-Benachrichtigungen loeschen.
+    trigger:
+      - platform: state
+        entity_id: input_boolean.bz_waschmaschine_running
+        to: "on"
+    condition: []
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: bz_waschmaschine_fertig
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: bz_waschmaschine_watchdog
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          message: clear_notification
+          data:
+            tag: bz_waschmaschine_fertig
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          message: clear_notification
+          data:
+            tag: bz_waschmaschine_watchdog
+      - service: notify.mobile_app_iphone_weini
+        data:
+          message: clear_notification
+          data:
+            tag: bz_waschmaschine_fertig
+      - service: notify.mobile_app_iphone_weini
+        data:
+          message: clear_notification
+          data:
+            tag: bz_waschmaschine_watchdog
+    mode: single

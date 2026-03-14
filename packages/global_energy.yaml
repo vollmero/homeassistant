@@ -1,0 +1,149 @@
+#############################################
+# Paket: Global – Strompreis (V2.0)
+#
+# Zentraler Strompreis für alle Haushaltsgeräte.
+# Nutzt aWATTar Public API direkt via REST (kein HACS nötig).
+# Fallback: manuell konfigurierbarer Preis.
+#
+# Ausgabe:  sensor.globaler_strompreis_aktuell (€/kWh)
+#           sensor.globaler_strompreis_ct       (ct/kWh, Brutto)
+#           sensor.strompreis_niveau   (Günstig/Normal/Teuer)
+#
+# Genutzt von:
+#   - bz_waschmaschine.yaml  →  sensor.globaler_strompreis_aktuell
+#   - ku_spuelmaschine.yaml  →  sensor.globaler_strompreis_aktuell
+#############################################
+
+
+#######################
+# REST Sensor – aWATTar Public API
+# Kein Account, kein HACS nötig.
+# Aktualisierung stündlich.
+#######################
+
+sensor:
+  - platform: rest
+    name: "aWATTar Marktpreis"
+    unique_id: awattar_marktpreis_rest
+    resource: https://api.awattar.de/v1/marketdata
+    method: GET
+    scan_interval: 3600
+    # aWATTar liefert marketprice in EUR/MWh → /10 = ct/kWh (netto, ohne Aufschlag/MwSt)
+    value_template: >
+      {% set now_ms = (now().timestamp() * 1000) | int %}
+      {% set prices = value_json.data | list %}
+      {% set current = prices | selectattr('start_timestamp', '<=', now_ms)
+                               | selectattr('end_timestamp', '>', now_ms)
+                               | list %}
+      {% if current | count > 0 %}
+        {{ (current[0].marketprice / 10) | round(2) }}
+      {% else %}
+        unknown
+      {% endif %}
+    unit_of_measurement: "ct/kWh"
+    json_attributes:
+      - data
+
+
+#######################
+# Helfer
+#######################
+
+input_number:
+
+  # Aufschlag in ct/kWh (Netzentgelte + Abgaben + aWATTar-Marge, NETTO ohne MwSt)
+  # Schau in deinen aWATTar-Vertrag oder Jahresabrechnung.
+  # Typischer Richtwert für HOURLY DE: ca. 16 ct/kWh
+  global_strompreis_aufschlag:
+    name: Strompreis Aufschlag (ct/kWh netto)
+    min: 0.00
+    max: 50.00
+    step: 0.01
+    unit_of_measurement: "ct/kWh"
+    mode: box
+    initial: 16.00
+    icon: mdi:plus-circle-outline
+
+  # MwSt in Prozent (Deutschland: 19)
+  global_strompreis_mwst:
+    name: Strompreis MwSt (%)
+    min: 0
+    max: 30
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+    initial: 19
+    icon: mdi:percent
+
+  # Manueller Fallback-Preis (€/kWh) – aktiv wenn aWATTar deaktiviert
+  global_strompreis_manuell:
+    name: Strompreis Manuell Fallback
+    min: 0.05
+    max: 1.00
+    step: 0.001
+    unit_of_measurement: "€/kWh"
+    mode: box
+    initial: 0.30
+    icon: mdi:currency-eur
+
+#######################
+# Template-Sensoren
+#######################
+
+template:
+  - sensor:
+
+      # ── Brutto-Preis in ct/kWh ───────────────────────────────────────────
+      # Formel: (Marktpreis_netto + Aufschlag_netto) × (1 + MwSt/100)
+      - name: "Globaler Strompreis ct"
+        unique_id: global_strompreis_ct
+        unit_of_measurement: "ct/kWh"
+        icon: mdi:lightning-bolt
+        state: >
+          {% set markt = states('sensor.awattar_marktpreis') | float(-1) %}
+          {% set aufschlag = states('input_number.global_strompreis_aufschlag') | float(16.0) %}
+          {% set mwst = states('input_number.global_strompreis_mwst') | float(19) %}
+          {% set manuell_ct = states('input_number.global_strompreis_manuell') | float(0.30) * 100 %}
+          {% if markt >= 0 %}
+            {{ ((markt + aufschlag) * (1 + mwst / 100)) | round(2) }}
+          {% else %}
+            {{ manuell_ct | round(2) }}
+          {% endif %}
+        attributes:
+          quelle: >
+            {% if states('sensor.awattar_marktpreis') | float(-1) >= 0 %}
+              aWATTar
+            {% else %}
+              Manuell (Fallback)
+            {% endif %}
+          marktpreis_netto_ct: >
+            {{ states('sensor.awattar_marktpreis') | float(0) | round(2) }}
+          aufschlag_ct: >
+            {{ states('input_number.global_strompreis_aufschlag') | float(16) | round(2) }}
+          mwst_pct: >
+            {{ states('input_number.global_strompreis_mwst') | float(19) | round(0) | int }}
+
+      # ── Preis in €/kWh (für Kostenberechnung in WM + SM) ────────────────
+      - name: "Globaler Strompreis aktuell"
+        unique_id: global_strompreis_aktuell
+        unit_of_measurement: "€/kWh"
+        icon: mdi:currency-eur
+        state: >
+          {{ (states('sensor.globaler_strompreis_ct') | float(30) / 100) | round(4) }}
+
+      # ── Preisniveau-Einschätzung ─────────────────────────────────────────
+      - name: "Strompreis Niveau"
+        unique_id: strompreis_niveau
+        icon: >
+          {% set ct = states('sensor.globaler_strompreis_ct') | float(0) %}
+          {% if ct < 25 %}mdi:arrow-down-circle
+          {% elif ct < 35 %}mdi:minus-circle
+          {% else %}mdi:arrow-up-circle
+          {% endif %}
+        state: >
+          {% set ct = states('sensor.globaler_strompreis_ct') | float(0) %}
+          {% if ct < 25 %}Günstig
+          {% elif ct < 35 %}Normal
+          {% elif ct < 45 %}Teuer
+          {% else %}Sehr teuer
+          {% endif %}

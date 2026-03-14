@@ -1,0 +1,435 @@
+# ==============================================================================
+# PACKAGE: Urlaubssteuerung – Anwesenheitssimulation
+#
+# FUNKTIONSWEISE:
+# 1. Trigger: Taeglich zur konfigurierten Startzeit (input_datetime)
+# 2. Bedingungen: input_boolean.urlaub_aktiv == on UND Kalender-Event "Urlaub"
+# 3. Schleife (repeat: while):
+#    a) Sammle alle verfuegbaren Lichter aus den Simulationsbereichen
+#    b) Filtere: nur verfuegbar, aus, nicht letzte Lampe, keine Gruppen/Studio
+#    c) Waehle zufaellig eine Lampe → einschalten
+#    d) Warte zufaellige ON-Dauer (konfigurierbar, Standard 5–15 Min)
+#    e) Lampe ausschalten
+#    f) Warte zufaellige Pause (konfigurierbar, Standard 1–5 Min)
+#    g) Wiederhole bis Nachtzeit oder Urlaub deaktiviert
+# 4. Sofortiger Abbruch: wait_for_trigger auf Nachtzeit in jeder Wartephase
+# 5. Aufraeumen: Alle Lichter in 5 Bereichen ausschalten
+# 6. Sperre: Keine weitere Aktion bis naechsten Abend (restart-sicher)
+#
+# SICHERHEITS-FEATURES:
+# - mode: restart → sauberer Neustart bei HA-Restart oder erneutem Trigger
+# - Max. 100 Iterationen als Endlosschleifen-Schutz
+# - wait_for_trigger statt delay → reagiert sofort auf Nachtzeit
+# - Verfuegbarkeits-Check bei jeder Lampenauswahl
+# - Letzte-Lampe-Tracking verhindert Wiederholung
+#
+# SIMULATIONSBEREICHE (Lichter werden hier zufaellig geschaltet):
+# - Arbeitszimmer, Wohnzimmer, Schlafzimmer, Kueche
+#
+# ABSCHALT-BEREICHE (werden bei Nachtzeit komplett ausgeschaltet):
+# - Arbeitszimmer, Wohnzimmer, Kueche, Badezimmer, Kinderzimmer
+#
+# KALENDER-INTEGRATION:
+# - Erfordert eine Kalender-Entitaet mit ganztaegigem Event "Urlaub"
+# - Aktuell konfiguriert: calendar.urlaub
+#
+# EXTERNE ABHAENGIGKEITEN:
+# - binary_sensor.zs_urlaub_nachtzeit (in diesem Package definiert)
+# - Kalender-Integration (Google Calendar, CalDAV, o.ae.)
+#
+# Notify:
+# - notify.mobile_app_iphone_15_pro_max_von_oliver
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# HELFER
+# ------------------------------------------------------------------------------
+
+input_boolean:
+  urlaub_aktiv:
+    name: ZS – Urlaub aktiv
+    icon: mdi:airplane
+
+input_datetime:
+  urlaub_startzeit:
+    name: ZS – Urlaub Simulationsstart
+    icon: mdi:clock-start
+    has_date: false
+    has_time: true
+
+  urlaub_endzeit:
+    name: ZS – Urlaub Simulationsende (Nachtzeit)
+    icon: mdi:clock-end
+    has_date: false
+    has_time: true
+
+input_number:
+  urlaub_min_on_time:
+    name: ZS – Urlaub Min. Leuchtdauer (Min)
+    icon: mdi:timer-outline
+    min: 1
+    max: 30
+    step: 1
+    unit_of_measurement: min
+    mode: slider
+
+  urlaub_max_on_time:
+    name: ZS – Urlaub Max. Leuchtdauer (Min)
+    icon: mdi:timer
+    min: 5
+    max: 60
+    step: 1
+    unit_of_measurement: min
+    mode: slider
+
+  urlaub_min_pause:
+    name: ZS – Urlaub Min. Pause (Min)
+    icon: mdi:pause-circle-outline
+    min: 1
+    max: 15
+    step: 1
+    unit_of_measurement: min
+    mode: slider
+
+  urlaub_max_pause:
+    name: ZS – Urlaub Max. Pause (Min)
+    icon: mdi:pause-circle
+    min: 1
+    max: 30
+    step: 1
+    unit_of_measurement: min
+    mode: slider
+
+input_text:
+  urlaub_letzte_lampe:
+    name: ZS – Urlaub letzte Lampe
+    icon: mdi:lightbulb-outline
+    max: 255
+
+# ------------------------------------------------------------------------------
+# TEMPLATE-SENSOREN
+# ------------------------------------------------------------------------------
+
+template:
+  - binary_sensor:
+      # Nachtzeit fuer Urlaubssimulation (konfigurierbares Zeitfenster)
+      # Wird 'on' wenn die aktuelle Zeit die Endzeit ueberschritten hat
+      - name: ZS – Urlaub Nachtzeit
+        unique_id: zs_urlaub_nachtzeit
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:weather-night
+          {% else %}
+            mdi:weather-sunset
+          {% endif %}
+        state: >
+          {% set endzeit = states('input_datetime.urlaub_endzeit') %}
+          {% set startzeit = states('input_datetime.urlaub_startzeit') %}
+          {% if endzeit in ['unknown', 'unavailable']
+             or startzeit in ['unknown', 'unavailable'] %}
+            {{ false }}
+          {% else %}
+            {% set jetzt = now().strftime('%H:%M') %}
+            {% set ende = endzeit[0:5] %}
+            {% set start = startzeit[0:5] %}
+            {# Nachtzeit: nach Endzeit ODER vor Startzeit (naechster Tag) #}
+            {% if ende > start %}
+              {{ jetzt >= ende or jetzt < start }}
+            {% else %}
+              {# Endzeit ist am naechsten Tag (z.B. Start 21:00, Ende 01:00) #}
+              {{ jetzt >= ende and jetzt < start }}
+            {% endif %}
+          {% endif %}
+
+      # Kombinierter Urlaubsstatus: Boolean UND Kalender
+      - name: ZS – Urlaub Bedingung erfuellt
+        unique_id: zs_urlaub_bedingung_erfuellt
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:airplane-check
+          {% else %}
+            mdi:airplane-off
+          {% endif %}
+        state: >
+          {% set boolean_aktiv = is_state('input_boolean.urlaub_aktiv', 'on') %}
+          {% set kalender_entity = 'calendar.urlaub' %}
+          {% set kalender_aktiv =
+               is_state(kalender_entity, 'on')
+               and 'urlaub' in (state_attr(kalender_entity, 'message')
+                    | default('') | lower) %}
+          {{ boolean_aktiv and kalender_aktiv }}
+
+# ------------------------------------------------------------------------------
+# AUTOMATION: Urlaubssimulation (Hauptautomation)
+# ------------------------------------------------------------------------------
+
+automation:
+  - id: urlaub_anwesenheitssimulation
+    alias: "ZS – Urlaub Anwesenheitssimulation"
+    description: >
+      Simuliert Anwesenheit durch zufaelliges Ein-/Ausschalten von Lichtern
+      in konfigurierbaren Raeumen waehrend des Urlaubs.
+    mode: restart
+    max_exceeded: silent
+
+    # ------------------------------------------------------------------
+    # TRIGGER
+    # ------------------------------------------------------------------
+    trigger:
+      # Primaerer Trigger: Taeglich zur eingestellten Startzeit
+      - platform: time
+        at: input_datetime.urlaub_startzeit
+        id: startzeit
+
+      # Sekundaerer Trigger: Falls Boolean waehrend Simulationszeitraum
+      # aktiviert wird (z.B. vergessen einzuschalten)
+      - platform: state
+        entity_id: input_boolean.urlaub_aktiv
+        to: "on"
+        id: boolean_aktiviert
+
+    # ------------------------------------------------------------------
+    # BEDINGUNGEN
+    # ------------------------------------------------------------------
+    condition:
+      # Urlaubsmodus muss aktiv sein
+      - condition: state
+        entity_id: input_boolean.urlaub_aktiv
+        state: "on"
+
+      # Es darf noch nicht Nachtzeit sein
+      - condition: state
+        entity_id: binary_sensor.zs_urlaub_nachtzeit
+        state: "off"
+
+      # Kalender-Bedingung (kombinierter Sensor)
+      # HINWEIS: Wenn du die Kalender-Pruefung erstmal weglassen willst,
+      # kommentiere die naechsten 3 Zeilen aus und nutze nur den Boolean.
+      - condition: state
+        entity_id: binary_sensor.zs_urlaub_bedingung_erfuellt
+        state: "on"
+
+    # ------------------------------------------------------------------
+    # AKTION
+    # ------------------------------------------------------------------
+    action:
+      # --- Initialisierung ---
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.urlaub_letzte_lampe
+        data:
+          value: ""
+
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "🏖️ Urlaubssimulation"
+          message: "Anwesenheitssimulation gestartet."
+
+      # --- Variablen fuer Bereiche und Ausschluss-Muster ---
+      - variables:
+          # HINWEIS: Bereichsnamen als Slugs (Maschinennamen).
+          # Pruefe deine Area-IDs unter: Entwicklerwerkzeuge → Vorlagen →
+          #   {{ areas() | list }}
+          # area_entities() akzeptiert sowohl Slug als auch Anzeigename.
+          sim_bereiche:
+            - "arbeitszimmer"
+            - "wohnzimmer"
+            - "schlafzimmer"
+            - "kuche"
+          abschalt_bereiche:
+            - "arbeitszimmer"
+            - "wohnzimmer"
+            - "kuche"
+            - "badezimmer"
+            - "kinderzimmer"
+          # Entity-IDs die diese Muster enthalten werden uebersprungen:
+          # - Gruppen (gesamt), Lichtszenen, Studio-Equipment, Speziallichter
+          ausschluss_muster:
+            - "gesamt"
+            - "lichtszene"
+            - "lichtszenen"
+            - "lichszenen"
+            - "studiobeleuchtung"
+            - "studiomonitore"
+            - "kh120"
+            - "kh750"
+            - "drm1"
+            - "eurorack"
+            - "ssl_konsole"
+            - "spl_vitalizer"
+            - "bodenbeleuchtung"
+            - "nachtlicht"
+            - "fernsehbeleuchtung"
+            - "holiday"
+            - "wandstrahlergruppe"
+            - "deckenstrahlergruppe"
+            - "lampengruppe"
+          max_iterationen: 100
+
+      # ================================================================
+      # HAUPTSCHLEIFE
+      # ================================================================
+      - repeat:
+          while:
+            # Weiterlaufen solange:
+            # 1. Noch keine Nachtzeit
+            # 2. Urlaub-Boolean noch aktiv
+            # 3. Endlosschleifen-Schutz: max. Iterationen
+            - condition: state
+              entity_id: binary_sensor.zs_urlaub_nachtzeit
+              state: "off"
+            - condition: state
+              entity_id: input_boolean.urlaub_aktiv
+              state: "on"
+            - condition: template
+              value_template: "{{ repeat.index <= max_iterationen }}"
+
+          sequence:
+            # --- Schritt 1: Verfuegbare Lampen sammeln ---
+            - variables:
+                letzte_lampe: "{{ states('input_text.urlaub_letzte_lampe') }}"
+                verfuegbare_lampen: >
+                  {% set ns = namespace(lampen=[]) %}
+                  {% for bereich in sim_bereiche %}
+                    {% for e in area_entities(bereich) %}
+                      {% if e.startswith('light.')
+                         and states(e) not in ['unavailable', 'unknown']
+                         and states(e) == 'off'
+                         and e != letzte_lampe
+                         and ausschluss_muster
+                            | select('in', e | lower)
+                            | list | length == 0 %}
+                        {% set ns.lampen = ns.lampen + [e] %}
+                      {% endif %}
+                    {% endfor %}
+                  {% endfor %}
+                  {{ ns.lampen }}
+                anzahl_lampen: >
+                  {{ verfuegbare_lampen | length }}
+
+            # --- Schritt 2: Pruefen ob Lampen verfuegbar ---
+            - if:
+                - condition: template
+                  value_template: "{{ anzahl_lampen | int > 0 }}"
+              then:
+                # --- Schritt 3: Zufaellige Lampe waehlen ---
+                - variables:
+                    zufalls_index: >
+                      {{ range(0, anzahl_lampen | int) | random }}
+                    gewaehlte_lampe: >
+                      {{ verfuegbare_lampen[zufalls_index | int] }}
+                    on_dauer_min: >
+                      {% set min_val = states('input_number.urlaub_min_on_time') | int(5) %}
+                      {% set max_val = states('input_number.urlaub_max_on_time') | int(15) %}
+                      {% if min_val > max_val %}{% set min_val = max_val %}{% endif %}
+                      {{ range(min_val, max_val + 1) | random }}
+                    pause_dauer_min: >
+                      {% set min_val = states('input_number.urlaub_min_pause') | int(1) %}
+                      {% set max_val = states('input_number.urlaub_max_pause') | int(5) %}
+                      {% if min_val > max_val %}{% set min_val = max_val %}{% endif %}
+                      {{ range(min_val, max_val + 1) | random }}
+
+                # --- Schritt 4: Letzte Lampe merken ---
+                - service: input_text.set_value
+                  target:
+                    entity_id: input_text.urlaub_letzte_lampe
+                  data:
+                    value: "{{ gewaehlte_lampe }}"
+
+                # --- Schritt 5: Lampe einschalten ---
+                - service: light.turn_on
+                  target:
+                    entity_id: "{{ gewaehlte_lampe }}"
+                  data:
+                    # Zufaellige Helligkeit 40–100% fuer Realismus
+                    brightness_pct: "{{ range(40, 101) | random }}"
+
+                # --- Schritt 6: Warten (ON-Dauer) ---
+                # wait_for_trigger statt delay: Reagiert sofort auf Nachtzeit
+                - wait_for_trigger:
+                    - platform: state
+                      entity_id: binary_sensor.zs_urlaub_nachtzeit
+                      to: "on"
+                    - platform: state
+                      entity_id: input_boolean.urlaub_aktiv
+                      to: "off"
+                  timeout:
+                    minutes: "{{ on_dauer_min | int }}"
+                  continue_on_timeout: true
+
+                # --- Schritt 7: Lampe ausschalten ---
+                - service: light.turn_off
+                  target:
+                    entity_id: "{{ gewaehlte_lampe }}"
+
+                # --- Schritt 8: Abbruch-Check vor Pause ---
+                - condition: state
+                  entity_id: binary_sensor.zs_urlaub_nachtzeit
+                  state: "off"
+                - condition: state
+                  entity_id: input_boolean.urlaub_aktiv
+                  state: "on"
+
+                # --- Schritt 9: Pause zwischen Schaltvorgaengen ---
+                - wait_for_trigger:
+                    - platform: state
+                      entity_id: binary_sensor.zs_urlaub_nachtzeit
+                      to: "on"
+                    - platform: state
+                      entity_id: input_boolean.urlaub_aktiv
+                      to: "off"
+                  timeout:
+                    minutes: "{{ pause_dauer_min | int }}"
+                  continue_on_timeout: true
+
+              else:
+                # Keine Lampen verfuegbar → kurz warten und erneut pruefen
+                # (z.B. wenn alle Lampen unavailable sind)
+                - wait_for_trigger:
+                    - platform: state
+                      entity_id: binary_sensor.zs_urlaub_nachtzeit
+                      to: "on"
+                    - platform: state
+                      entity_id: input_boolean.urlaub_aktiv
+                      to: "off"
+                  timeout:
+                    minutes: 5
+                  continue_on_timeout: true
+
+      # ================================================================
+      # AUFRAEUMEN: Alle Lichter in den Abschalt-Bereichen ausschalten
+      # ================================================================
+      # HINWEIS: area_id erwartet den Slug (Maschinenname) des Bereichs.
+      # Pruefe deine Area-IDs unter: Entwicklerwerkzeuge → Vorlagen →
+      #   {{ areas() | list }}
+      # Falls deine Slugs anders heissen, hier anpassen!
+      - service: light.turn_off
+        target:
+          area_id:
+            - "arbeitszimmer"
+            - "wohnzimmer"
+            - "kuche"
+            - "badezimmer"
+            - "kinderzimmer"
+
+      # --- Letzte Lampe zuruecksetzen ---
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.urlaub_letzte_lampe
+        data:
+          value: ""
+
+      # --- Benachrichtigung: Simulation beendet ---
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "🌙 Urlaubssimulation"
+          message: >
+            Anwesenheitssimulation beendet.
+            {% if is_state('binary_sensor.zs_urlaub_nachtzeit', 'on') %}
+              Grund: Nachtzeit erreicht.
+            {% elif is_state('input_boolean.urlaub_aktiv', 'off') %}
+              Grund: Urlaubsmodus deaktiviert.
+            {% else %}
+              Grund: Max. Iterationen erreicht.
+            {% endif %}
+            Alle Lichter in den Abschalt-Bereichen wurden ausgeschaltet.

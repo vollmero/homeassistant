@@ -1,0 +1,874 @@
+# ==============================================================================
+# PACKAGE: Nachtlichtsteuerung (Alle Räume)
+#
+# FUNKTIONSWEISE:
+# 1. Nachtzeit beginnt + Master AN → Timer startet
+# 2. Bewegung im Flur → Timer cancel
+# 3. Keine Bewegung für X Minuten → Lichter aus (außer pausierte Räume)
+# 4. Licht wird wieder eingeschaltet → Timer startet neu
+# 5. Zyklus wiederholt sich bis Nachtende
+# 6. Nachtende → Timer stoppen, Pause-Schalter zurücksetzen
+# 7. Raum-Pause aufgehoben → Timer startet neu,
+#    nach Ablauf ohne Bewegung → Lichter im Raum aus (V1.1)
+# 8. Vorlauf/Nachtstart → Actionable Notification für Räume mit Licht an (V1.3)
+# 9. Notification-Aktion → Räume pausieren (V1.2)
+#
+# V1.1: Fix Chained Comparison im Zeitfenster-Sensor
+# V1.2: Actionable Notifications mit pro-Raum Benachrichtigungs-Toggle
+# V1.3: Konfigurierbarer Vorlauf für Notification (0-30 Minuten vor Nachtbeginn)
+# V1.4: Zeitplanbasiertes Nachtfenster (schedule.zs_nachtlicht_zeitplan)
+#        - Wenn Zeitplan aktiv: Schedule-State bestimmt Nachtzeit
+#          (Mo-Fr / Sa-So mit unterschiedlichen Zeiten konfigurierbar)
+#        - Wenn Zeitplan inaktiv: Fallback auf feste Von/Bis-Zeiten
+#        - Vorlauf-Sensor nutzt schedule next_event im Zeitplan-Modus
+# V1.5: Notification-Fix: Actions als Variable für iOS Companion App
+#
+# Externe Abhängigkeiten:
+# - binary_sensor.fl_bewegungsmelder_01_bewegung (Flur Bewegungsmelder)
+# - schedule.zs_nachtlicht_zeitplan (Schedule Helper, in HA-UI erstellen!)
+#
+# Lichter:
+# AZ: light.az_hangelampe_01, light.az_schreibtischbeleuchtung_01,
+#     light.az_stehlampe_01
+# BZ: light.bz_strahler_01, light.bz_strahler_02, light.bz_strahler_03
+# WZ: light.wz_hangelampe_01, light.wz_kommodenlicht_01,
+#     light.wz_sofalicht_01, light.wz_stehlampe_01, light.wz_stehlampe_02
+# KU: light.ku_wandstrahler_01, light.ku_wandstrahler_02,
+#     light.ku_deckenlampe_1
+# KI: light.ki_deckenlampe_01, light.ki_hohlenlicht
+# SZ: light.sz_tischlampe_01, light.sz_deckenlampe_02
+#
+# NICHT berücksichtigt:
+# - light.nachtlicht (Flur, eigene Regelung)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# HELFER
+# ------------------------------------------------------------------------------
+
+input_boolean:
+  zs_nachtlicht_master:
+    name: ZS – Nachtlicht Master
+    icon: mdi:shield-moon
+
+  # --- Zeitplan-Modus (V1.4) ---
+
+  zs_nachtlicht_zeitplan_aktiv:
+    name: ZS – Nachtlicht Zeitplan aktiv
+    icon: mdi:calendar-clock
+
+  # --- Pause-Schalter pro Raum ---
+
+  az_nachtlicht_pause:
+    name: AZ – Nachtlicht Pause
+    icon: mdi:pause-circle
+
+  bz_nachtlicht_pause:
+    name: BZ – Nachtlicht Pause
+    icon: mdi:pause-circle
+
+  wz_nachtlicht_pause:
+    name: WZ – Nachtlicht Pause
+    icon: mdi:pause-circle
+
+  ku_nachtlicht_pause:
+    name: KU – Nachtlicht Pause
+    icon: mdi:pause-circle
+
+  ki_nachtlicht_pause:
+    name: KI – Nachtlicht Pause
+    icon: mdi:pause-circle
+
+  sz_nachtlicht_pause:
+    name: SZ – Nachtlicht Pause
+    icon: mdi:pause-circle
+
+  # --- Benachrichtigung pro Raum (V1.2) ---
+
+  az_nachtlicht_notify:
+    name: AZ – Nachtlicht Benachrichtigung
+    icon: mdi:bell-ring-outline
+
+  bz_nachtlicht_notify:
+    name: BZ – Nachtlicht Benachrichtigung
+    icon: mdi:bell-ring-outline
+
+  wz_nachtlicht_notify:
+    name: WZ – Nachtlicht Benachrichtigung
+    icon: mdi:bell-ring-outline
+
+  ku_nachtlicht_notify:
+    name: KU – Nachtlicht Benachrichtigung
+    icon: mdi:bell-ring-outline
+
+  ki_nachtlicht_notify:
+    name: KI – Nachtlicht Benachrichtigung
+    icon: mdi:bell-ring-outline
+
+  sz_nachtlicht_notify:
+    name: SZ – Nachtlicht Benachrichtigung
+    icon: mdi:bell-ring-outline
+
+input_datetime:
+  zs_nachtlicht_von:
+    name: ZS – Nachtlicht Von
+    has_date: false
+    has_time: true
+    icon: mdi:weather-night
+
+  zs_nachtlicht_bis:
+    name: ZS – Nachtlicht Bis
+    has_date: false
+    has_time: true
+    icon: mdi:weather-sunset-up
+
+input_number:
+  zs_nachtlicht_pruefzeit:
+    name: ZS – Nachtlicht Prüfzeit (Minuten)
+    min: 1
+    max: 60
+    step: 1
+    unit_of_measurement: "min"
+    mode: slider
+    icon: mdi:timer-outline
+
+  # --- Vorlaufzeit für Notification (V1.3) ---
+  zs_nachtlicht_vorlauf:
+    name: ZS – Nachtlicht Vorlauf (Minuten)
+    min: 0
+    max: 30
+    step: 1
+    unit_of_measurement: "min"
+    mode: slider
+    icon: mdi:bell-alert-outline
+
+# ------------------------------------------------------------------------------
+# TIMER
+# ------------------------------------------------------------------------------
+
+timer:
+  zs_nachtlicht_bewegung:
+    name: ZS – Nachtlicht Bewegungs-Timer
+    restore: false
+
+# ------------------------------------------------------------------------------
+# TEMPLATE-SENSOREN
+# ------------------------------------------------------------------------------
+
+template:
+  - binary_sensor:
+      # --- Zeitfenster (V1.4: Schedule-Support) ---
+      - name: ZS – Nachtlicht Zeitfenster
+        unique_id: zs_nachtlicht_zeitfenster
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:weather-night
+          {% else %}
+            mdi:weather-sunset-up
+          {% endif %}
+        state: >
+          {% if is_state('input_boolean.zs_nachtlicht_zeitplan_aktiv', 'on') %}
+            {{ is_state('schedule.zs_nachtlicht_zeitplan', 'on') }}
+          {% else %}
+            {% set von = states('input_datetime.zs_nachtlicht_von')[0:5] %}
+            {% set bis = states('input_datetime.zs_nachtlicht_bis')[0:5] %}
+            {% set jetzt = now().strftime('%H:%M') %}
+            {% if not von or not bis %}
+              {{ false }}
+            {% elif von < bis %}
+              {{ von <= jetzt and jetzt < bis }}
+            {% else %}
+              {{ jetzt >= von or jetzt < bis }}
+            {% endif %}
+          {% endif %}
+
+      # --- Nachtlicht aktiv ---
+      - name: ZS – Nachtlicht aktiv
+        unique_id: zs_nachtlicht_aktiv
+        icon: mdi:shield-moon
+        state: >
+          {{ is_state('input_boolean.zs_nachtlicht_master', 'on')
+             and is_state('binary_sensor.zs_nachtlicht_zeitfenster', 'on') }}
+
+      # --- Vorlauf-Sensor (V1.3 + V1.4: Schedule-Support) ---
+      # Wird on X Minuten vor Nachtbeginn, off bei Nachtbeginn.
+      # Bei Vorlauf = 0 bleibt der Sensor immer off.
+      # V1.4: Im Zeitplan-Modus wird next_event des Schedules genutzt.
+      - name: ZS – Nachtlicht Vorlauf
+        unique_id: zs_nachtlicht_vorlauf
+        icon: mdi:bell-alert-outline
+        state: >
+          {% set vorlauf = states('input_number.zs_nachtlicht_vorlauf') | int(0) %}
+          {% set master = is_state('input_boolean.zs_nachtlicht_master', 'on') %}
+          {% set nacht_aktiv = is_state('binary_sensor.zs_nachtlicht_aktiv', 'on') %}
+          {% if not master or nacht_aktiv or vorlauf == 0 %}
+            {{ false }}
+          {% elif is_state('input_boolean.zs_nachtlicht_zeitplan_aktiv', 'on') %}
+            {# Zeitplan-Modus: next_event des Schedules nutzen #}
+            {% if is_state('schedule.zs_nachtlicht_zeitplan', 'off') %}
+              {% set next = state_attr('schedule.zs_nachtlicht_zeitplan', 'next_event') %}
+              {% if next != None %}
+                {% set diff = (as_datetime(next) - now()).total_seconds() / 60 %}
+                {{ diff >= 0 and diff <= vorlauf }}
+              {% else %}
+                {{ false }}
+              {% endif %}
+            {% else %}
+              {{ false }}
+            {% endif %}
+          {% else %}
+            {# Feste Zeiten: bisherige Logik #}
+            {% set von_str = states('input_datetime.zs_nachtlicht_von')[0:5] %}
+            {% set jetzt = now().strftime('%H:%M') %}
+            {% set von_h = von_str.split(':')[0] | int %}
+            {% set von_m = von_str.split(':')[1] | int %}
+            {% set total_min = von_h * 60 + von_m - vorlauf %}
+            {% if total_min < 0 %}{% set total_min = total_min + 1440 %}{% endif %}
+            {% set start = '%02d:%02d' | format((total_min // 60) % 24, total_min % 60) %}
+            {% if start < von_str %}
+              {{ start <= jetzt and jetzt < von_str }}
+            {% else %}
+              {{ jetzt >= start or jetzt < von_str }}
+            {% endif %}
+          {% endif %}
+
+# ------------------------------------------------------------------------------
+# AUTOMATIONEN
+# ------------------------------------------------------------------------------
+
+automation:
+  # ==========================================================================
+  # 1) NACHTSTART → Timer starten
+  # ==========================================================================
+  - id: zs_nachtlicht_start
+    alias: ZS – Nachtlicht Start
+    description: >
+      Nachtzeit beginnt und Master ist AN: Timer starten.
+      Wenn Bewegung erkannt → Timer startet nicht (Automation 3 übernimmt).
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.zs_nachtlicht_aktiv
+        to: "on"
+    condition: []
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.fl_bewegungsmelder_01_bewegung
+                state: "off"
+            sequence:
+              - service: timer.start
+                target:
+                  entity_id: timer.zs_nachtlicht_bewegung
+                data:
+                  duration: >
+                    {{ '00:' ~ '%02d' | format(states('input_number.zs_nachtlicht_pruefzeit') | int(15)) ~ ':00' }}
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.fl_bewegungsmelder_01_bewegung
+                state: "on"
+            sequence:
+              - service: timer.cancel
+                target:
+                  entity_id: timer.zs_nachtlicht_bewegung
+    mode: single
+
+  # ==========================================================================
+  # 2) NACHTENDE → Timer stoppen, Pause-Schalter zurücksetzen
+  # ==========================================================================
+  - id: zs_nachtlicht_ende
+    alias: ZS – Nachtlicht Ende
+    description: >
+      Nachtzeit endet oder Master wird ausgeschaltet:
+      Timer stoppen, alle Pause-Schalter zurücksetzen.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.zs_nachtlicht_aktiv
+        to: "off"
+    condition: []
+    action:
+      - service: timer.cancel
+        target:
+          entity_id: timer.zs_nachtlicht_bewegung
+      - service: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.az_nachtlicht_pause
+            - input_boolean.bz_nachtlicht_pause
+            - input_boolean.wz_nachtlicht_pause
+            - input_boolean.ku_nachtlicht_pause
+            - input_boolean.ki_nachtlicht_pause
+            - input_boolean.sz_nachtlicht_pause
+    mode: single
+
+  # ==========================================================================
+  # 3) BEWEGUNG STEUERT TIMER
+  # ==========================================================================
+  - id: zs_nachtlicht_bewegung_timer
+    alias: ZS – Nachtlicht Bewegung steuert Timer
+    description: >
+      Flurbewegung steuert den Timer: Bewegung → cancel,
+      keine Bewegung → starten, unavailable → cancel.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.fl_bewegungsmelder_01_bewegung
+    condition:
+      - condition: state
+        entity_id: binary_sensor.zs_nachtlicht_aktiv
+        state: "on"
+    action:
+      - variables:
+          bewegung_state: "{{ states('binary_sensor.fl_bewegungsmelder_01_bewegung') }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ bewegung_state == 'on' }}"
+            sequence:
+              - service: timer.cancel
+                target:
+                  entity_id: timer.zs_nachtlicht_bewegung
+
+          - conditions:
+              - condition: template
+                value_template: "{{ bewegung_state == 'off' }}"
+            sequence:
+              - service: timer.start
+                target:
+                  entity_id: timer.zs_nachtlicht_bewegung
+                data:
+                  duration: >
+                    {{ '00:' ~ '%02d' | format(states('input_number.zs_nachtlicht_pruefzeit') | int(15)) ~ ':00' }}
+
+          - conditions:
+              - condition: template
+                value_template: "{{ bewegung_state in ['unavailable', 'unknown'] }}"
+            sequence:
+              - service: timer.cancel
+                target:
+                  entity_id: timer.zs_nachtlicht_bewegung
+        default: []
+    mode: restart
+
+  # ==========================================================================
+  # 4) TIMER ABGELAUFEN → Lichter aus (außer pausierte Räume)
+  # ==========================================================================
+  - id: zs_nachtlicht_timer_abgelaufen
+    alias: ZS – Nachtlicht Timer abgelaufen
+    description: >
+      Prüfzeit ohne Bewegung abgelaufen: Alle Lichter aus,
+      außer in pausierten Räumen.
+    trigger:
+      - platform: event
+        event_type: timer.finished
+        event_data:
+          entity_id: timer.zs_nachtlicht_bewegung
+    condition:
+      - condition: state
+        entity_id: binary_sensor.zs_nachtlicht_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.fl_bewegungsmelder_01_bewegung
+        state: "off"
+    action:
+      # --- AZ ---
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.az_nachtlicht_pause
+                state: "off"
+            sequence:
+              - service: light.turn_off
+                target:
+                  entity_id:
+                    - light.az_hangelampe_01
+                    - light.az_schreibtischbeleuchtung_01
+                    - light.az_stehlampe_01
+        default: []
+
+      # --- BZ ---
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.bz_nachtlicht_pause
+                state: "off"
+            sequence:
+              - service: light.turn_off
+                target:
+                  entity_id:
+                    - light.bz_strahler_01
+                    - light.bz_strahler_02
+                    - light.bz_strahler_03
+        default: []
+
+      # --- WZ ---
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.wz_nachtlicht_pause
+                state: "off"
+            sequence:
+              - service: light.turn_off
+                target:
+                  entity_id:
+                    - light.wz_hangelampe_01
+                    - light.wz_kommodenlicht_01
+                    - light.wz_sofalicht_01
+                    - light.wz_stehlampe_01
+                    - light.wz_stehlampe_02
+        default: []
+
+      # --- KU ---
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.ku_nachtlicht_pause
+                state: "off"
+            sequence:
+              - service: light.turn_off
+                target:
+                  entity_id:
+                    - light.ku_wandstrahler_01
+                    - light.ku_wandstrahler_02
+                    - light.ku_deckenlampe_1
+        default: []
+
+      # --- KI ---
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.ki_nachtlicht_pause
+                state: "off"
+            sequence:
+              - service: light.turn_off
+                target:
+                  entity_id:
+                    - light.ki_deckenlampe_01
+                    - light.ki_hohlenlicht
+        default: []
+
+      # --- SZ ---
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.sz_nachtlicht_pause
+                state: "off"
+            sequence:
+              - service: light.turn_off
+                target:
+                  entity_id:
+                    - light.sz_tischlampe_01
+                    - light.sz_deckenlampe_02
+        default: []
+    mode: single
+
+  # ==========================================================================
+  # 5) LICHT EINGESCHALTET → Timer neu starten
+  # ==========================================================================
+  - id: zs_nachtlicht_licht_an
+    alias: ZS – Nachtlicht Licht eingeschaltet
+    description: >
+      Ein Licht wird während der Nachtzeit eingeschaltet (nicht in
+      pausiertem Raum): Timer neu starten.
+    trigger:
+      - platform: state
+        entity_id:
+          - light.az_hangelampe_01
+          - light.az_schreibtischbeleuchtung_01
+          - light.az_stehlampe_01
+          - light.bz_strahler_01
+          - light.bz_strahler_02
+          - light.bz_strahler_03
+          - light.wz_hangelampe_01
+          - light.wz_kommodenlicht_01
+          - light.wz_sofalicht_01
+          - light.wz_stehlampe_01
+          - light.wz_stehlampe_02
+          - light.ku_wandstrahler_01
+          - light.ku_wandstrahler_02
+          - light.ku_deckenlampe_1
+          - light.ki_deckenlampe_01
+          - light.ki_hohlenlicht
+          - light.sz_tischlampe_01
+          - light.sz_deckenlampe_02
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: binary_sensor.zs_nachtlicht_aktiv
+        state: "on"
+      - condition: template
+        value_template: >
+          {% set e = trigger.entity_id %}
+          {% set az = e in ['light.az_hangelampe_01', 'light.az_schreibtischbeleuchtung_01', 'light.az_stehlampe_01'] %}
+          {% set bz = e in ['light.bz_strahler_01', 'light.bz_strahler_02', 'light.bz_strahler_03'] %}
+          {% set wz = e in ['light.wz_hangelampe_01', 'light.wz_kommodenlicht_01', 'light.wz_sofalicht_01', 'light.wz_stehlampe_01', 'light.wz_stehlampe_02'] %}
+          {% set ku = e in ['light.ku_wandstrahler_01', 'light.ku_wandstrahler_02', 'light.ku_deckenlampe_1'] %}
+          {% set ki = e in ['light.ki_deckenlampe_01', 'light.ki_hohlenlicht'] %}
+          {% set sz = e in ['light.sz_tischlampe_01', 'light.sz_deckenlampe_02'] %}
+          {{ not (az and is_state('input_boolean.az_nachtlicht_pause', 'on'))
+             and not (bz and is_state('input_boolean.bz_nachtlicht_pause', 'on'))
+             and not (wz and is_state('input_boolean.wz_nachtlicht_pause', 'on'))
+             and not (ku and is_state('input_boolean.ku_nachtlicht_pause', 'on'))
+             and not (ki and is_state('input_boolean.ki_nachtlicht_pause', 'on'))
+             and not (sz and is_state('input_boolean.sz_nachtlicht_pause', 'on')) }}
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.fl_bewegungsmelder_01_bewegung
+                state: "off"
+            sequence:
+              - service: timer.start
+                target:
+                  entity_id: timer.zs_nachtlicht_bewegung
+                data:
+                  duration: >
+                    {{ '00:' ~ '%02d' | format(states('input_number.zs_nachtlicht_pruefzeit') | int(15)) ~ ':00' }}
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.fl_bewegungsmelder_01_bewegung
+                state: "on"
+            sequence:
+              - service: timer.cancel
+                target:
+                  entity_id: timer.zs_nachtlicht_bewegung
+    mode: restart
+
+  # ==========================================================================
+  # 6) HA NEUSTART → Zustand prüfen
+  # ==========================================================================
+  - id: zs_nachtlicht_ha_neustart
+    alias: ZS – Nachtlicht HA Neustart
+    description: >
+      Bei HA Neustart: Wenn Nachtlicht aktiv, Timer starten.
+    trigger:
+      - platform: homeassistant
+        event: start
+    condition:
+      - condition: state
+        entity_id: binary_sensor.zs_nachtlicht_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.fl_bewegungsmelder_01_bewegung
+        state: "off"
+    action:
+      - service: timer.start
+        target:
+          entity_id: timer.zs_nachtlicht_bewegung
+        data:
+          duration: >
+            {{ '00:' ~ '%02d' | format(states('input_number.zs_nachtlicht_pruefzeit') | int(15)) ~ ':00' }}
+    mode: single
+
+  # ==========================================================================
+  # 7) PAUSE AUFGEHOBEN → Timer neu starten (V1.1)
+  # ==========================================================================
+  - id: zs_nachtlicht_pause_aufgehoben
+    alias: ZS – Nachtlicht Pause aufgehoben
+    description: >
+      Wenn eine Raum-Pause deaktiviert wird und Nachtlicht aktiv ist:
+      Timer neu starten. Nach Ablauf ohne Bewegung schaltet
+      Automation 4 die Lichter im (nun nicht mehr pausierten) Raum aus.
+    trigger:
+      - platform: state
+        entity_id:
+          - input_boolean.az_nachtlicht_pause
+          - input_boolean.bz_nachtlicht_pause
+          - input_boolean.wz_nachtlicht_pause
+          - input_boolean.ku_nachtlicht_pause
+          - input_boolean.ki_nachtlicht_pause
+          - input_boolean.sz_nachtlicht_pause
+        from: "on"
+        to: "off"
+    condition:
+      - condition: state
+        entity_id: binary_sensor.zs_nachtlicht_aktiv
+        state: "on"
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.fl_bewegungsmelder_01_bewegung
+                state: "off"
+            sequence:
+              - service: timer.start
+                target:
+                  entity_id: timer.zs_nachtlicht_bewegung
+                data:
+                  duration: >
+                    {{ '00:' ~ '%02d' | format(states('input_number.zs_nachtlicht_pruefzeit') | int(15)) ~ ':00' }}
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.fl_bewegungsmelder_01_bewegung
+                state: "on"
+            sequence:
+              - service: timer.cancel
+                target:
+                  entity_id: timer.zs_nachtlicht_bewegung
+        default: []
+    mode: restart
+
+  # ==========================================================================
+  # 8) VORLAUF / NACHTSTART → Actionable Notification (V1.3)
+  # ==========================================================================
+  - id: zs_nachtlicht_notification
+    alias: ZS – Nachtlicht Benachrichtigung
+    description: >
+      Zwei Trigger:
+        A) Vorlauf-Sensor → on (wenn Vorlauf > 0): Benachrichtigung
+           X Minuten vor Nachtbeginn.
+        B) Nachtlicht aktiv → on (Fallback wenn Vorlauf = 0):
+           Benachrichtigung genau bei Nachtbeginn.
+      Prüft welche Räume Licht an haben UND Benachrichtigung aktiviert.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.zs_nachtlicht_vorlauf
+        to: "on"
+        id: vorlauf
+      - platform: state
+        entity_id: binary_sensor.zs_nachtlicht_aktiv
+        to: "on"
+        id: nachtbeginn
+    condition:
+      # Bei Trigger "nachtbeginn": nur wenn Vorlauf = 0
+      # (sonst wurde schon beim Vorlauf benachrichtigt)
+      - condition: or
+        conditions:
+          - condition: trigger
+            id: vorlauf
+          - condition: and
+            conditions:
+              - condition: trigger
+                id: nachtbeginn
+              - condition: template
+                value_template: "{{ states('input_number.zs_nachtlicht_vorlauf') | int(0) == 0 }}"
+    action:
+      - variables:
+          vorlauf_min: "{{ states('input_number.zs_nachtlicht_vorlauf') | int(0) }}"
+          ist_vorlauf: "{{ trigger.id == 'vorlauf' }}"
+          az_relevant: >
+            {{ is_state('input_boolean.az_nachtlicht_notify', 'on')
+               and (is_state('light.az_hangelampe_01', 'on')
+                    or is_state('light.az_schreibtischbeleuchtung_01', 'on')
+                    or is_state('light.az_stehlampe_01', 'on')) }}
+          bz_relevant: >
+            {{ is_state('input_boolean.bz_nachtlicht_notify', 'on')
+               and (is_state('light.bz_strahler_01', 'on')
+                    or is_state('light.bz_strahler_02', 'on')
+                    or is_state('light.bz_strahler_03', 'on')) }}
+          wz_relevant: >
+            {{ is_state('input_boolean.wz_nachtlicht_notify', 'on')
+               and (is_state('light.wz_hangelampe_01', 'on')
+                    or is_state('light.wz_kommodenlicht_01', 'on')
+                    or is_state('light.wz_sofalicht_01', 'on')
+                    or is_state('light.wz_stehlampe_01', 'on')
+                    or is_state('light.wz_stehlampe_02', 'on')) }}
+          ku_relevant: >
+            {{ is_state('input_boolean.ku_nachtlicht_notify', 'on')
+               and (is_state('light.ku_wandstrahler_01', 'on')
+                    or is_state('light.ku_wandstrahler_02', 'on')
+                    or is_state('light.ku_deckenlampe_1', 'on')) }}
+          ki_relevant: >
+            {{ is_state('input_boolean.ki_nachtlicht_notify', 'on')
+               and (is_state('light.ki_deckenlampe_01', 'on')
+                    or is_state('light.ki_hohlenlicht', 'on')) }}
+          sz_relevant: >
+            {{ is_state('input_boolean.sz_nachtlicht_notify', 'on')
+               and (is_state('light.sz_tischlampe_01', 'on')
+                    or is_state('light.sz_deckenlampe_02', 'on')) }}
+          raeume_namen: >
+            {% set ns = namespace(namen=[]) %}
+            {% if az_relevant %}{% set ns.namen = ns.namen + ['Arbeitszimmer'] %}{% endif %}
+            {% if wz_relevant %}{% set ns.namen = ns.namen + ['Wohnzimmer'] %}{% endif %}
+            {% if bz_relevant %}{% set ns.namen = ns.namen + ['Badezimmer'] %}{% endif %}
+            {% if ku_relevant %}{% set ns.namen = ns.namen + ['Küche'] %}{% endif %}
+            {% if ki_relevant %}{% set ns.namen = ns.namen + ['Kinderzimmer'] %}{% endif %}
+            {% if sz_relevant %}{% set ns.namen = ns.namen + ['Schlafzimmer'] %}{% endif %}
+            {{ ns.namen }}
+          anzahl: "{{ raeume_namen | length }}"
+
+      - condition: template
+        value_template: "{{ anzahl | int > 0 }}"
+
+      # Actions-Liste als eigene Variable (wird als echte Liste evaluiert,
+      # statt als String im data-Block – Fix für iOS Companion App)
+      - variables:
+          notify_actions: >
+            {% set ns = namespace(actions=[]) %}
+            {% if az_relevant %}
+              {% set ns.actions = ns.actions + [{"action": "NACHTLICHT_PAUSE_AZ", "title": "💡 Arbeitszimmer"}] %}
+            {% endif %}
+            {% if wz_relevant %}
+              {% set ns.actions = ns.actions + [{"action": "NACHTLICHT_PAUSE_WZ", "title": "💡 Wohnzimmer"}] %}
+            {% endif %}
+            {% if bz_relevant %}
+              {% set ns.actions = ns.actions + [{"action": "NACHTLICHT_PAUSE_BZ", "title": "💡 Badezimmer"}] %}
+            {% endif %}
+            {% if ku_relevant %}
+              {% set ns.actions = ns.actions + [{"action": "NACHTLICHT_PAUSE_KU", "title": "💡 Küche"}] %}
+            {% endif %}
+            {% if ki_relevant %}
+              {% set ns.actions = ns.actions + [{"action": "NACHTLICHT_PAUSE_KI", "title": "💡 Kinderzimmer"}] %}
+            {% endif %}
+            {% if sz_relevant %}
+              {% set ns.actions = ns.actions + [{"action": "NACHTLICHT_PAUSE_SZ", "title": "💡 Schlafzimmer"}] %}
+            {% endif %}
+            {% if anzahl | int > 1 %}
+              {% set ns.actions = ns.actions + [{"action": "NACHTLICHT_PAUSE_ALLE", "title": "✅ Alle pausieren"}] %}
+            {% endif %}
+            {{ ns.actions }}
+
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: >
+            {% if ist_vorlauf %}
+              🌙 Nachtlicht in {{ vorlauf_min }} Min
+            {% else %}
+              🌙 Nachtlicht aktiv
+            {% endif %}
+          message: >
+            Licht an in: {{ raeume_namen | join(', ') }}.
+            ↓ Lange drücken zum Pausieren
+          data:
+            tag: nachtlicht_pause
+            push:
+              interruption-level: time-sensitive
+              presentation_options:
+                - alert
+                - sound
+            actions: "{{ notify_actions }}"
+    mode: single
+
+  # ==========================================================================
+  # 9) NOTIFICATION-AKTION → Räume pausieren (V1.2)
+  # ==========================================================================
+  - id: zs_nachtlicht_notification_aktion
+    alias: ZS – Nachtlicht Notification Aktion
+    description: >
+      Verarbeitet die Antwort auf die Nachtlicht-Notification
+      und pausiert die entsprechenden Räume. Sendet Bestätigung.
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: NACHTLICHT_PAUSE_AZ
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: NACHTLICHT_PAUSE_BZ
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: NACHTLICHT_PAUSE_WZ
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: NACHTLICHT_PAUSE_KU
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: NACHTLICHT_PAUSE_KI
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: NACHTLICHT_PAUSE_SZ
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: NACHTLICHT_PAUSE_ALLE
+    condition:
+      # Aktion erlaubt wenn Nachtlicht aktiv ODER im Vorlauf
+      - condition: or
+        conditions:
+          - condition: state
+            entity_id: binary_sensor.zs_nachtlicht_aktiv
+            state: "on"
+          - condition: state
+            entity_id: binary_sensor.zs_nachtlicht_vorlauf
+            state: "on"
+    action:
+      - variables:
+          aktion: "{{ trigger.event.data.action }}"
+
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ aktion == 'NACHTLICHT_PAUSE_AZ' }}"
+            sequence:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.az_nachtlicht_pause
+
+          - conditions:
+              - condition: template
+                value_template: "{{ aktion == 'NACHTLICHT_PAUSE_BZ' }}"
+            sequence:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.bz_nachtlicht_pause
+
+          - conditions:
+              - condition: template
+                value_template: "{{ aktion == 'NACHTLICHT_PAUSE_WZ' }}"
+            sequence:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.wz_nachtlicht_pause
+
+          - conditions:
+              - condition: template
+                value_template: "{{ aktion == 'NACHTLICHT_PAUSE_KU' }}"
+            sequence:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.ku_nachtlicht_pause
+
+          - conditions:
+              - condition: template
+                value_template: "{{ aktion == 'NACHTLICHT_PAUSE_KI' }}"
+            sequence:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.ki_nachtlicht_pause
+
+          - conditions:
+              - condition: template
+                value_template: "{{ aktion == 'NACHTLICHT_PAUSE_SZ' }}"
+            sequence:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.sz_nachtlicht_pause
+
+          - conditions:
+              - condition: template
+                value_template: "{{ aktion == 'NACHTLICHT_PAUSE_ALLE' }}"
+            sequence:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id:
+                    - input_boolean.az_nachtlicht_pause
+                    - input_boolean.bz_nachtlicht_pause
+                    - input_boolean.wz_nachtlicht_pause
+                    - input_boolean.ku_nachtlicht_pause
+                    - input_boolean.ki_nachtlicht_pause
+                    - input_boolean.sz_nachtlicht_pause
+
+      - variables:
+          bestaetigung: >
+            {% set map = {
+              'NACHTLICHT_PAUSE_AZ': 'Arbeitszimmer',
+              'NACHTLICHT_PAUSE_BZ': 'Badezimmer',
+              'NACHTLICHT_PAUSE_WZ': 'Wohnzimmer',
+              'NACHTLICHT_PAUSE_KU': 'Küche',
+              'NACHTLICHT_PAUSE_KI': 'Kinderzimmer',
+              'NACHTLICHT_PAUSE_SZ': 'Schlafzimmer',
+              'NACHTLICHT_PAUSE_ALLE': 'Alle Räume'
+            } %}
+            {{ map.get(aktion, 'Unbekannt') }}
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "✅ Nachtlicht Pause"
+          message: "{{ bestaetigung }} pausiert bis Nachtende."
+          data:
+            tag: nachtlicht_pause
+    mode: parallel
+    max: 3

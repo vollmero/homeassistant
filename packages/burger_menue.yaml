@@ -1,0 +1,101 @@
+# ==============================================================================
+# PACKAGE: Burger-Menü Helper (fuer Bubble Card Custom Dropdown Modul)
+#
+# ZWECK:
+# Input_Select Entities als Basis fuer die Burger-Menü Sub-Buttons
+# auf den Raum-Cards im Dashboard. Das Custom Dropdown Modul von Clooos
+# ersetzt die nummerierten Optionen visuell durch Icons + Labels.
+#
+# ENTITIES:
+# - input_select.az_raummenue  (Beleuchtung, Klima, Studiogear)
+# - input_select.bz_raummenue  (Beleuchtung, Klima, Waschmaschine)
+# - input_select.wz_raummenue  (Beleuchtung, Klima)
+# - input_select.ku_raummenue  (Beleuchtung, Klima, Spuelmaschine)
+# - input_select.ki_raummenue  (Beleuchtung, Klima)
+# - input_select.sz_raummenue  (Beleuchtung, Klima)
+#
+# OPTIONEN-LOGIK:
+# Option "0" = Platzhalter/Titel (zeigt "Menü" mit mdi:menu)
+# Option "1" = Beleuchtung
+# Option "2" = Klima
+# Option "3" = Raum-spezifisch (Studiogear / Waschmaschine / Spuelmaschine)
+#
+# EINBAU: In packages/ ablegen, HA Config pruefen + Neustart.
+# ==============================================================================
+
+input_select:
+
+  # ============================================================================
+  # AZ – Arbeitszimmer (3 Menuepunkte)
+  # Beleuchtung | Klima | Studiogear
+  # ============================================================================
+  az_raummenue:
+    name: AZ Raummenü
+    icon: mdi:menu
+    options:
+      - "0"
+      - "1"
+      - "2"
+      - "3"
+
+  # ============================================================================
+  # BZ – Badezimmer (3 Menuepunkte)
+  # Beleuchtung | Klima | Waschmaschine
+  # ============================================================================
+  bz_raummenue:
+    name: BZ Raummenü
+    icon: mdi:menu
+    options:
+      - "0"
+      - "1"
+      - "2"
+      - "3"
+
+  # ============================================================================
+  # WZ – Wohnzimmer (2 Menuepunkte)
+  # Beleuchtung | Klima
+  # ============================================================================
+  wz_raummenue:
+    name: WZ Raummenü
+    icon: mdi:menu
+    options:
+      - "0"
+      - "1"
+      - "2"
+
+  # ============================================================================
+  # KU – Küche (3 Menuepunkte)
+  # Beleuchtung | Klima | Spuelmaschine
+  # ============================================================================
+  ku_raummenue:
+    name: KU Raummenü
+    icon: mdi:menu
+    options:
+      - "0"
+      - "1"
+      - "2"
+      - "3"
+
+  # ============================================================================
+  # KI – Kinderzimmer (2 Menuepunkte)
+  # Beleuchtung | Klima
+  # ============================================================================
+  ki_raummenue:
+    name: KI Raummenü
+    icon: mdi:menu
+    options:
+      - "0"
+      - "1"
+      - "2"
+
+  # ============================================================================
+  # SZ – Schlafzimmer (2 Menuepunkte)
+  # Beleuchtung | Klima
+  # ============================================================================
+  sz_raummenue:
+    name: SZ Raummenü
+    icon: mdi:menu
+    options:
+      - "0"
+      - "1"
+      - "2"

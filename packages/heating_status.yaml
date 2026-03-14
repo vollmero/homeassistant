@@ -1,0 +1,252 @@
+# ==============================================================================
+# PACKAGE: Heizung Status-Sensoren - V4.0
+#
+# Zeigt pro Raum den aktuell greifenden Zustand der Heizlogik an.
+# Spiegelt die Prioritaetskette der Raum-Automationen.
+# ==============================================================================
+
+template:
+  - sensor:
+      # ── Arbeitszimmer ──
+      - name: "AZ Heizung Status"
+        unique_id: az_heizung_status
+        icon: mdi:radiator
+        state: >
+          {% set temp_sensor = 'sensor.az_raumklima_01_temperatur' %}
+          {% set fenster = 'binary_sensor.az_fenster_01_offnung' %}
+          {% set climate_entity = 'climate.az_heizung_01' %}
+          {% set raumtemp = states(temp_sensor) | float(-999) %}
+          {% set aussentemp = state_attr('weather.stuttgart_neckartal', 'temperature') | float(0) %}
+          {% set schwelle_aus = states('input_number.zs_heizung_aussen_aus') | float(15) %}
+          {% set zeitplan_aktiv = is_state('input_boolean.az_heizung_zeitplan_aktiv', 'on') %}
+          {% set schedule_on = is_state('schedule.az_heizung_zeitplan', 'on') %}
+          {% if zeitplan_aktiv and not schedule_on %}
+            {% set zieltemp = states('input_number.az_heizung_absenktemp') | float(17) %}
+          {% else %}
+            {% set zieltemp = states('input_number.az_heizung_zieltemperatur') | float(21) %}
+          {% endif %}
+          {% set trv_temp = state_attr(climate_entity, 'current_temperature') | float(raumtemp) %}
+          {% set offset = [[-5, (trv_temp - raumtemp) | round(1)] | max, 10] | min %}
+          {% if is_state(temp_sensor, 'unavailable') %}
+            Sensor offline
+          {% elif is_state(fenster, 'on') %}
+            Fenster offen
+          {% elif is_state('input_boolean.az_heizung_automatik', 'off') %}
+            Automatik aus
+          {% elif is_state('input_boolean.zs_heizung_master', 'off') %}
+            Abwesend
+          {% elif is_state('binary_sensor.zs_heizung_nachtzeit', 'on') %}
+            Nachtmodus
+          {% elif aussentemp >= schwelle_aus %}
+            Außen warm ({{ aussentemp }}°C)
+          {% elif zeitplan_aktiv and not schedule_on %}
+            Absenk {{ zieltemp }}°C
+          {% elif raumtemp >= zieltemp %}
+            {{ raumtemp | round(1) }}°C erreicht (Ziel {{ zieltemp }}°C)
+          {% else %}
+            Regelt → {{ zieltemp }}°C (TRV {{ (zieltemp + offset) | round(1) }}°C)
+          {% endif %}
+
+      # ── Badezimmer ──
+      - name: "BZ Heizung Status"
+        unique_id: bz_heizung_status
+        icon: mdi:radiator
+        state: >
+          {% set temp_sensor = 'sensor.bz_raumklima_01_temperatur' %}
+          {% set fenster = 'binary_sensor.bz_fenster_01' %}
+          {% set climate_entity = 'climate.bz_heizung_01' %}
+          {% set raumtemp = states(temp_sensor) | float(-999) %}
+          {% set aussentemp = state_attr('weather.stuttgart_neckartal', 'temperature') | float(0) %}
+          {% set schwelle_aus = states('input_number.zs_heizung_aussen_aus') | float(15) %}
+          {% set zeitplan_aktiv = is_state('input_boolean.bz_heizung_zeitplan_aktiv', 'on') %}
+          {% set schedule_on = is_state('schedule.bz_heizung_zeitplan', 'on') %}
+          {% if zeitplan_aktiv and not schedule_on %}
+            {% set zieltemp = states('input_number.bz_heizung_absenktemp') | float(17) %}
+          {% else %}
+            {% set zieltemp = states('input_number.bz_heizung_zieltemperatur') | float(21) %}
+          {% endif %}
+          {% set trv_temp = state_attr(climate_entity, 'current_temperature') | float(raumtemp) %}
+          {% set offset = [[-5, (trv_temp - raumtemp) | round(1)] | max, 10] | min %}
+          {% if is_state(temp_sensor, 'unavailable') %}
+            Sensor offline
+          {% elif is_state(fenster, 'on') %}
+            Fenster offen
+          {% elif is_state('input_boolean.bz_heizung_automatik', 'off') %}
+            Automatik aus
+          {% elif is_state('input_boolean.zs_heizung_master', 'off') %}
+            Abwesend
+          {% elif is_state('binary_sensor.zs_heizung_nachtzeit', 'on') %}
+            Nachtmodus
+          {% elif aussentemp >= schwelle_aus %}
+            Außen warm ({{ aussentemp }}°C)
+          {% elif zeitplan_aktiv and not schedule_on %}
+            Absenk {{ zieltemp }}°C
+          {% elif raumtemp >= zieltemp %}
+            {{ raumtemp | round(1) }}°C erreicht (Ziel {{ zieltemp }}°C)
+          {% else %}
+            Regelt → {{ zieltemp }}°C (TRV {{ (zieltemp + offset) | round(1) }}°C)
+          {% endif %}
+
+      # ── Wohnzimmer ──
+      - name: "WZ Heizung Status"
+        unique_id: wz_heizung_status
+        icon: mdi:radiator
+        state: >
+          {% set temp_sensor = 'sensor.wz_raumklima_01_temperatur' %}
+          {% set fenster = 'binary_sensor.wz_fenstergruppe_01' %}
+          {% set climate_entity = 'climate.wz_heizungsgruppe_01' %}
+          {% set raumtemp = states(temp_sensor) | float(-999) %}
+          {% set aussentemp = state_attr('weather.stuttgart_neckartal', 'temperature') | float(0) %}
+          {% set schwelle_aus = states('input_number.zs_heizung_aussen_aus') | float(15) %}
+          {% set zeitplan_aktiv = is_state('input_boolean.wz_heizung_zeitplan_aktiv', 'on') %}
+          {% set schedule_on = is_state('schedule.wz_heizung_zeitplan', 'on') %}
+          {% if zeitplan_aktiv and not schedule_on %}
+            {% set zieltemp = states('input_number.wz_heizung_absenktemp') | float(17) %}
+          {% else %}
+            {% set zieltemp = states('input_number.wz_heizung_zieltemperatur') | float(21) %}
+          {% endif %}
+          {% set trv_temp = state_attr(climate_entity, 'current_temperature') | float(raumtemp) %}
+          {% set offset = [[-5, (trv_temp - raumtemp) | round(1)] | max, 10] | min %}
+          {% if is_state(temp_sensor, 'unavailable') %}
+            Sensor offline
+          {% elif is_state(fenster, 'on') %}
+            Fenster offen
+          {% elif is_state('input_boolean.wz_heizung_automatik', 'off') %}
+            Automatik aus
+          {% elif is_state('input_boolean.zs_heizung_master', 'off') %}
+            Abwesend
+          {% elif is_state('binary_sensor.zs_heizung_nachtzeit', 'on') %}
+            Nachtmodus
+          {% elif aussentemp >= schwelle_aus %}
+            Außen warm ({{ aussentemp }}°C)
+          {% elif zeitplan_aktiv and not schedule_on %}
+            Absenk {{ zieltemp }}°C
+          {% elif raumtemp >= zieltemp %}
+            {{ raumtemp | round(1) }}°C erreicht (Ziel {{ zieltemp }}°C)
+          {% else %}
+            Regelt → {{ zieltemp }}°C (TRV {{ (zieltemp + offset) | round(1) }}°C)
+          {% endif %}
+
+      # ── Küche ──
+      - name: "KU Heizung Status"
+        unique_id: ku_heizung_status
+        icon: mdi:radiator
+        state: >
+          {% set temp_sensor = 'sensor.ku_raumklima_01_temperatur' %}
+          {% set fenster = 'binary_sensor.ku_fenstergruppe_01' %}
+          {% set climate_entity = 'climate.ku_heizung_01' %}
+          {% set raumtemp = states(temp_sensor) | float(-999) %}
+          {% set aussentemp = state_attr('weather.stuttgart_neckartal', 'temperature') | float(0) %}
+          {% set schwelle_aus = states('input_number.zs_heizung_aussen_aus') | float(15) %}
+          {% set zeitplan_aktiv = is_state('input_boolean.ku_heizung_zeitplan_aktiv', 'on') %}
+          {% set schedule_on = is_state('schedule.ku_heizung_zeitplan', 'on') %}
+          {% if zeitplan_aktiv and not schedule_on %}
+            {% set zieltemp = states('input_number.ku_heizung_absenktemp') | float(17) %}
+          {% else %}
+            {% set zieltemp = states('input_number.ku_heizung_zieltemperatur') | float(21) %}
+          {% endif %}
+          {% set trv_temp = state_attr(climate_entity, 'current_temperature') | float(raumtemp) %}
+          {% set offset = [[-5, (trv_temp - raumtemp) | round(1)] | max, 10] | min %}
+          {% if is_state(temp_sensor, 'unavailable') %}
+            Sensor offline
+          {% elif is_state(fenster, 'on') %}
+            Fenster offen
+          {% elif is_state('input_boolean.ku_heizung_automatik', 'off') %}
+            Automatik aus
+          {% elif is_state('input_boolean.zs_heizung_master', 'off') %}
+            Abwesend
+          {% elif is_state('binary_sensor.zs_heizung_nachtzeit', 'on') %}
+            Nachtmodus
+          {% elif aussentemp >= schwelle_aus %}
+            Außen warm ({{ aussentemp }}°C)
+          {% elif zeitplan_aktiv and not schedule_on %}
+            Absenk {{ zieltemp }}°C
+          {% elif raumtemp >= zieltemp %}
+            {{ raumtemp | round(1) }}°C erreicht (Ziel {{ zieltemp }}°C)
+          {% else %}
+            Regelt → {{ zieltemp }}°C (TRV {{ (zieltemp + offset) | round(1) }}°C)
+          {% endif %}
+
+      # ── Kinderzimmer (mit früher Nacht) ──
+      - name: "KI Heizung Status"
+        unique_id: ki_heizung_status
+        icon: mdi:radiator
+        state: >
+          {% set temp_sensor = 'sensor.ki_raumklima_01_temperatur' %}
+          {% set fenster = 'binary_sensor.ki_fenstergruppe_01' %}
+          {% set climate_entity = 'climate.ki_heizungsgruppe_01' %}
+          {% set raumtemp = states(temp_sensor) | float(-999) %}
+          {% set aussentemp = state_attr('weather.stuttgart_neckartal', 'temperature') | float(0) %}
+          {% set schwelle_aus = states('input_number.zs_heizung_aussen_aus') | float(15) %}
+          {% set zeitplan_aktiv = is_state('input_boolean.ki_heizung_zeitplan_aktiv', 'on') %}
+          {% set schedule_on = is_state('schedule.ki_heizung_zeitplan', 'on') %}
+          {% if zeitplan_aktiv and not schedule_on %}
+            {% set zieltemp = states('input_number.ki_heizung_absenktemp') | float(17) %}
+          {% else %}
+            {% set zieltemp = states('input_number.ki_heizung_zieltemperatur') | float(21) %}
+          {% endif %}
+          {% set trv_temp = state_attr(climate_entity, 'current_temperature') | float(raumtemp) %}
+          {% set offset = [[-5, (trv_temp - raumtemp) | round(1)] | max, 10] | min %}
+          {% if is_state(temp_sensor, 'unavailable') %}
+            Sensor offline
+          {% elif is_state(fenster, 'on') %}
+            Fenster offen
+          {% elif is_state('input_boolean.ki_heizung_automatik', 'off') %}
+            Automatik aus
+          {% elif is_state('input_boolean.zs_heizung_master', 'off') %}
+            Abwesend
+          {% elif is_state('binary_sensor.zs_heizung_nachtzeit', 'on') %}
+            Nachtmodus
+          {% elif is_state('binary_sensor.zs_heizung_fruehe_nacht_zeitfenster', 'on') %}
+            Frühe Nacht
+          {% elif aussentemp >= schwelle_aus %}
+            Außen warm ({{ aussentemp }}°C)
+          {% elif zeitplan_aktiv and not schedule_on %}
+            Absenk {{ zieltemp }}°C
+          {% elif raumtemp >= zieltemp %}
+            {{ raumtemp | round(1) }}°C erreicht (Ziel {{ zieltemp }}°C)
+          {% else %}
+            Regelt → {{ zieltemp }}°C (TRV {{ (zieltemp + offset) | round(1) }}°C)
+          {% endif %}
+
+      # ── Schlafzimmer (mit früher Nacht) ──
+      - name: "SZ Heizung Status"
+        unique_id: sz_heizung_status
+        icon: mdi:radiator
+        state: >
+          {% set temp_sensor = 'sensor.sz_raumklima_01_temperatur' %}
+          {% set fenster = 'binary_sensor.sz_fenster_01' %}
+          {% set climate_entity = 'climate.sz_heizung_01' %}
+          {% set raumtemp = states(temp_sensor) | float(-999) %}
+          {% set aussentemp = state_attr('weather.stuttgart_neckartal', 'temperature') | float(0) %}
+          {% set schwelle_aus = states('input_number.zs_heizung_aussen_aus') | float(15) %}
+          {% set zeitplan_aktiv = is_state('input_boolean.sz_heizung_zeitplan_aktiv', 'on') %}
+          {% set schedule_on = is_state('schedule.sz_heizung_zeitplan', 'on') %}
+          {% if zeitplan_aktiv and not schedule_on %}
+            {% set zieltemp = states('input_number.sz_heizung_absenktemp') | float(17) %}
+          {% else %}
+            {% set zieltemp = states('input_number.sz_heizung_zieltemperatur') | float(21) %}
+          {% endif %}
+          {% set trv_temp = state_attr(climate_entity, 'current_temperature') | float(raumtemp) %}
+          {% set offset = [[-5, (trv_temp - raumtemp) | round(1)] | max, 10] | min %}
+          {% if is_state(temp_sensor, 'unavailable') %}
+            Sensor offline
+          {% elif is_state(fenster, 'on') %}
+            Fenster offen
+          {% elif is_state('input_boolean.sz_heizung_automatik', 'off') %}
+            Automatik aus
+          {% elif is_state('input_boolean.zs_heizung_master', 'off') %}
+            Abwesend
+          {% elif is_state('binary_sensor.zs_heizung_nachtzeit', 'on') %}
+            Nachtmodus
+          {% elif is_state('binary_sensor.zs_heizung_fruehe_nacht_zeitfenster', 'on') %}
+            Frühe Nacht
+          {% elif aussentemp >= schwelle_aus %}
+            Außen warm ({{ aussentemp }}°C)
+          {% elif zeitplan_aktiv and not schedule_on %}
+            Absenk {{ zieltemp }}°C
+          {% elif raumtemp >= zieltemp %}
+            {{ raumtemp | round(1) }}°C erreicht (Ziel {{ zieltemp }}°C)
+          {% else %}
+            Regelt → {{ zieltemp }}°C (TRV {{ (zieltemp + offset) | round(1) }}°C)
+          {% endif %}

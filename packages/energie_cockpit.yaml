@@ -1,0 +1,1158 @@
+##############################################################################
+# PACKAGE: Energie-Cockpit V2.0 – Gesamtueberblick Stromverbrauch
+#
+# Drei Kategorien:
+#
+#   A) BELEUCHTUNG (virtuell geschaetzt ueber Nennleistung x Helligkeit)
+#      Hue:       Play (1x 6.5W), White LWB010 (7x 9.5W),
+#                 Color LCT010 (2x 10.5W), Go (1x 6.5W),
+#                 Gradient LCX004 (1x 20W), Lightstrip LCL001 (3x 10W)
+#      Aqara:     T2 GU10 (3x 4.8W)
+#      IKEA:      Tradfri GU10 CWS (2x 5.4W)
+#      Nanoleaf:  Floor Lamp (1x 23W), Holiday Lights (1x 12W)
+#
+#   B) STUDIO GEAR
+#      Virtuell (Hue Plugs, kein Mess-Sensor):
+#        DRM1 (18W), SSL 360 (27W), Eurorack/Godfather (22W),
+#        SPL Vitalizer (32W), KH120 Stereopaar (35W), KH750 (22W)
+#      Echte Messung (Aqara/ThirdReality Plugs):
+#        Eventide H90, Pedal 02, Meris LVX
+#
+#   C) HAUSHALTSGERAETE (echte Messung, bestehende Packages)
+#      Waschmaschine (bz_waschmaschine.yaml)
+#      Spuelmaschine (ku_spuelmaschine.yaml)
+#
+# Strompreis: sensor.globaler_strompreis_aktuell (bestehend, aWATTar)
+#
+# Leistungsformel Lampen:
+#   W = W_max x (0.2 + 0.8 x brightness/255)   mit Helligkeit
+#   W = W_max                                    state=on, ohne brightness
+#   W = 0                                        state=off / unavailable
+#
+# EINRICHTUNG:
+#   1. In packages/ ablegen
+#   2. HA Config pruefen -> Neustart
+#   3. Integration-Sensoren im Energy Dashboard einbinden
+#   4. Dashboard "Energie Cockpit" anlegen (separate YAML)
+##############################################################################
+
+
+# ========================================================================
+# 1. HELFER
+# ========================================================================
+
+input_number:
+
+  # Tarifvergleich
+  ec_alter_tarif:
+    name: "EC Alter Tarif"
+    icon: mdi:tag-minus-outline
+    min: 0.10
+    max: 1.00
+    step: 0.01
+    unit_of_measurement: "EUR/kWh"
+    mode: box
+    initial: 0.35
+
+  ec_neuer_tarif:
+    name: "EC Neuer Tarif"
+    icon: mdi:tag-check-outline
+    min: 0.10
+    max: 1.00
+    step: 0.01
+    unit_of_measurement: "EUR/kWh"
+    mode: box
+    initial: 0.30
+
+
+# ========================================================================
+# 2. TEMPLATE-SENSOREN
+# ========================================================================
+
+template:
+  - sensor:
+
+      # ──────────────────────────────────────────────────────────────
+      # A) BELEUCHTUNG – Leistung (W) pro Geraetetyp
+      # ──────────────────────────────────────────────────────────────
+
+      # Hue Play (1x, 6.5W) → light.nachtlicht
+      - name: "EC Leistung Hue Play"
+        unique_id: ec_power_hue_play
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:television-ambient-light
+        state: >
+          {% set entities = ['light.nachtlicht'] %}
+          {% set w_max = 6.5 %}
+          {% set ns = namespace(total=0) %}
+          {% for e in entities %}
+            {% if is_state(e, 'on') %}
+              {% set bri = state_attr(e, 'brightness') %}
+              {% if bri is not none and bri | float(0) > 0 %}
+                {% set ns.total = ns.total + w_max * (0.2 + 0.8 * (bri | float / 255)) %}
+              {% else %}
+                {% set ns.total = ns.total + w_max %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total | round(2) }}
+
+      # Hue White LWB010 (7x, 9.5W)
+      - name: "EC Leistung Hue White"
+        unique_id: ec_power_hue_white
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:lightbulb
+        state: >
+          {% set entities = [
+            'light.sz_deckenlampe_01', 'light.sz_deckenlampe_02',
+            'light.sz_deckenlampe_03', 'light.wz_hangelampe_01',
+            'light.wz_stehlampe_01', 'light.wz_stehlampe_02',
+            'light.ku_deckenlampe_1'
+          ] %}
+          {% set w_max = 9.5 %}
+          {% set ns = namespace(total=0) %}
+          {% for e in entities %}
+            {% if is_state(e, 'on') %}
+              {% set bri = state_attr(e, 'brightness') %}
+              {% if bri is not none and bri | float(0) > 0 %}
+                {% set ns.total = ns.total + w_max * (0.2 + 0.8 * (bri | float / 255)) %}
+              {% else %}
+                {% set ns.total = ns.total + w_max %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total | round(2) }}
+
+      # Hue Color LCT010 (2x, 10.5W)
+      - name: "EC Leistung Hue Color"
+        unique_id: ec_power_hue_color
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:lightbulb-multiple
+        state: >
+          {% set entities = ['light.ki_deckenlampe_01', 'light.az_hangelampe_01'] %}
+          {% set w_max = 10.5 %}
+          {% set ns = namespace(total=0) %}
+          {% for e in entities %}
+            {% if is_state(e, 'on') %}
+              {% set bri = state_attr(e, 'brightness') %}
+              {% if bri is not none and bri | float(0) > 0 %}
+                {% set ns.total = ns.total + w_max * (0.2 + 0.8 * (bri | float / 255)) %}
+              {% else %}
+                {% set ns.total = ns.total + w_max %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total | round(2) }}
+
+      # Hue Go (1x, 6.5W) → light.sz_tischlampe_01
+      - name: "EC Leistung Hue Go"
+        unique_id: ec_power_hue_go
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:lamp
+        state: >
+          {% set entities = ['light.sz_tischlampe_01'] %}
+          {% set w_max = 6.5 %}
+          {% set ns = namespace(total=0) %}
+          {% for e in entities %}
+            {% if is_state(e, 'on') %}
+              {% set bri = state_attr(e, 'brightness') %}
+              {% if bri is not none and bri | float(0) > 0 %}
+                {% set ns.total = ns.total + w_max * (0.2 + 0.8 * (bri | float / 255)) %}
+              {% else %}
+                {% set ns.total = ns.total + w_max %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total | round(2) }}
+
+      # Hue Gradient LCX004 (1x, 20W) → light.az_schreibtischbeleuchtung_01
+      - name: "EC Leistung Hue Gradient"
+        unique_id: ec_power_hue_gradient
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:led-strip-variant
+        state: >
+          {% set entities = ['light.az_schreibtischbeleuchtung_01'] %}
+          {% set w_max = 20.0 %}
+          {% set ns = namespace(total=0) %}
+          {% for e in entities %}
+            {% if is_state(e, 'on') %}
+              {% set bri = state_attr(e, 'brightness') %}
+              {% if bri is not none and bri | float(0) > 0 %}
+                {% set ns.total = ns.total + w_max * (0.2 + 0.8 * (bri | float / 255)) %}
+              {% else %}
+                {% set ns.total = ns.total + w_max %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total | round(2) }}
+
+      # Hue Lightstrip Plus LCL001 (3x, 10W)
+      - name: "EC Leistung Hue Lightstrip"
+        unique_id: ec_power_hue_lightstrip
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:led-strip
+        state: >
+          {% set entities = [
+            'light.ki_hohlenlicht', 'light.wz_kommodenlicht_01',
+            'light.wz_sofalicht_01'
+          ] %}
+          {% set w_max = 10.0 %}
+          {% set ns = namespace(total=0) %}
+          {% for e in entities %}
+            {% if is_state(e, 'on') %}
+              {% set bri = state_attr(e, 'brightness') %}
+              {% if bri is not none and bri | float(0) > 0 %}
+                {% set ns.total = ns.total + w_max * (0.2 + 0.8 * (bri | float / 255)) %}
+              {% else %}
+                {% set ns.total = ns.total + w_max %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total | round(2) }}
+
+      # Aqara T2 GU10 (3x, 4.8W) – Badezimmer Strahler
+      - name: "EC Leistung Aqara GU10"
+        unique_id: ec_power_aqara_gu10
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:ceiling-light
+        state: >
+          {% set entities = [
+            'light.bz_strahler_01', 'light.bz_strahler_02',
+            'light.bz_strahler_03'
+          ] %}
+          {% set w_max = 4.8 %}
+          {% set ns = namespace(total=0) %}
+          {% for e in entities %}
+            {% if is_state(e, 'on') %}
+              {% set bri = state_attr(e, 'brightness') %}
+              {% if bri is not none and bri | float(0) > 0 %}
+                {% set ns.total = ns.total + w_max * (0.2 + 0.8 * (bri | float / 255)) %}
+              {% else %}
+                {% set ns.total = ns.total + w_max %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total | round(2) }}
+
+      # IKEA Tradfri GU10 CWS (2x, 5.4W) – Kueche Wandstrahler
+      - name: "EC Leistung IKEA GU10"
+        unique_id: ec_power_ikea_gu10
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:wall-sconce-flat
+        state: >
+          {% set entities = ['light.ku_wandstrahler_01', 'light.ku_wandstrahler_02'] %}
+          {% set w_max = 5.4 %}
+          {% set ns = namespace(total=0) %}
+          {% for e in entities %}
+            {% if is_state(e, 'on') %}
+              {% set bri = state_attr(e, 'brightness') %}
+              {% if bri is not none and bri | float(0) > 0 %}
+                {% set ns.total = ns.total + w_max * (0.2 + 0.8 * (bri | float / 255)) %}
+              {% else %}
+                {% set ns.total = ns.total + w_max %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total | round(2) }}
+
+      # Nanoleaf Floor Lamp (1x, 23W) – AZ Stehlampe
+      # Nur _01_2 zaehlen (_01_3 ist Segment desselben Geraets)
+      - name: "EC Leistung Nanoleaf Stehlampe"
+        unique_id: ec_power_nanoleaf_stehlampe
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:floor-lamp
+        state: >
+          {% set entities = ['light.az_stehlampe_01'] %}
+          {% set w_max = 23.0 %}
+          {% set ns = namespace(total=0) %}
+          {% for e in entities %}
+            {% if is_state(e, 'on') %}
+              {% set bri = state_attr(e, 'brightness') %}
+              {% if bri is not none and bri | float(0) > 0 %}
+                {% set ns.total = ns.total + w_max * (0.2 + 0.8 * (bri | float / 255)) %}
+              {% else %}
+                {% set ns.total = ns.total + w_max %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total | round(2) }}
+
+      # Nanoleaf Holiday Lights (1x, 12W)
+      - name: "EC Leistung Nanoleaf Holiday"
+        unique_id: ec_power_nanoleaf_holiday
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:string-lights
+        state: >
+          {% set entities = ['light.holiday_string_lights'] %}
+          {% set w_max = 12.0 %}
+          {% set ns = namespace(total=0) %}
+          {% for e in entities %}
+            {% if is_state(e, 'on') %}
+              {% set bri = state_attr(e, 'brightness') %}
+              {% if bri is not none and bri | float(0) > 0 %}
+                {% set ns.total = ns.total + w_max * (0.2 + 0.8 * (bri | float / 255)) %}
+              {% else %}
+                {% set ns.total = ns.total + w_max %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total | round(2) }}
+
+      # ──────────────────────────────────────────────────────────────
+      # B) STUDIO GEAR – Virtuell geschaetzt (Hue Smart Plugs)
+      #    Einfache on/off Logik, keine Helligkeit
+      # ──────────────────────────────────────────────────────────────
+
+      - name: "EC Leistung Studio Virtuell"
+        unique_id: ec_power_studio_virtuell
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:audio-video
+        state: >
+          {% set geraete = {
+            'light.az_drm1': 18,
+            'light.az_ssl': 27,
+            'light.az_eurorack': 22,
+            'light.az_vitalizer': 32,
+            'light.az_kh120': 35,
+            'light.kh750': 22
+          } %}
+          {% set ns = namespace(total=0) %}
+          {% for entity, watt in geraete.items() %}
+            {% if is_state(entity, 'on') %}
+              {% set ns.total = ns.total + watt %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total | round(1) }}
+        attributes:
+          detail: >
+            {% set geraete = {
+              'DRM1 (18W)': 'light.az_drm1',
+              'SSL 360 (27W)': 'light.az_ssl',
+              'Eurorack (22W)': 'light.az_eurorack',
+              'Vitalizer (32W)': 'light.az_vitalizer',
+              'KH120 Paar (35W)': 'light.az_kh120',
+              'KH750 (22W)': 'light.kh750'
+            } %}
+            {% set ns = namespace(an=[]) %}
+            {% for name, entity in geraete.items() %}
+              {% if is_state(entity, 'on') %}
+                {% set ns.an = ns.an + [name] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.an | join(', ') if ns.an | count > 0 else 'Alles aus' }}
+
+      # ──────────────────────────────────────────────────────────────
+      # KATEGORIE-SUMMEN (Leistung W)
+      # ──────────────────────────────────────────────────────────────
+
+      # Beleuchtung Gesamt (alle virtuellen Lampen)
+      - name: "EC Leistung Beleuchtung"
+        unique_id: ec_power_beleuchtung
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:lightbulb-group
+        state: >
+          {% set s = [
+            'sensor.ec_leistung_hue_play',
+            'sensor.ec_leistung_hue_white',
+            'sensor.ec_leistung_hue_color',
+            'sensor.ec_leistung_hue_go',
+            'sensor.ec_leistung_hue_gradient',
+            'sensor.ec_leistung_hue_lightstrip',
+            'sensor.ec_leistung_aqara_gu10',
+            'sensor.ec_leistung_ikea_gu10',
+            'sensor.ec_leistung_nanoleaf_stehlampe',
+            'sensor.ec_leistung_nanoleaf_holiday'
+          ] %}
+          {% set ns = namespace(total=0) %}
+          {% for e in s %}
+            {% set ns.total = ns.total + states(e) | float(0) %}
+          {% endfor %}
+          {{ ns.total | round(2) }}
+
+      # Studio Gesamt (virtuell + echte Messung)
+      - name: "EC Leistung Studio"
+        unique_id: ec_power_studio
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:music
+        state: >
+          {% set virtuell = states('sensor.ec_leistung_studio_virtuell') | float(0) %}
+          {% set h90 = states('sensor.third_reality_inc_3rspe01044bz_leistung_2') | float(0) %}
+          {% set pedal = states('sensor.az_pedal_02_leistung') | float(0) %}
+          {% set lvx = states('sensor.meris_lvx_leistung') | float(0) %}
+          {{ (virtuell + h90 + pedal + lvx) | round(2) }}
+
+      # Haushalt Gesamt (echte Messung aus bestehenden Packages)
+      - name: "EC Leistung Haushalt"
+        unique_id: ec_power_haushalt
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:home-lightning-bolt
+        state: >
+          {% set wm = states('sensor.bz_waschmaschine_01_leistung') | float(0) %}
+          {% set sm = states('sensor.ku_spuelmaschine_leistung') | float(0) %}
+          {{ (wm + sm) | round(2) }}
+
+      # GRAND TOTAL
+      - name: "EC Leistung Gesamt"
+        unique_id: ec_power_gesamt
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:flash
+        state: >
+          {% set bel = states('sensor.ec_leistung_beleuchtung') | float(0) %}
+          {% set stu = states('sensor.ec_leistung_studio') | float(0) %}
+          {% set hau = states('sensor.ec_leistung_haushalt') | float(0) %}
+          {{ (bel + stu + hau) | round(2) }}
+
+      # ──────────────────────────────────────────────────────────────
+      # KOSTEN-SENSOREN (Monat)
+      # Strompreis: sensor.globaler_strompreis_aktuell (bestehend)
+      # ──────────────────────────────────────────────────────────────
+
+      # -- Hue Typen --
+      - name: "EC Kosten Hue Play Monat"
+        unique_id: ec_cost_hue_play_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {{ (states('sensor.ec_energy_hue_play_monthly') | float(0) *
+              states('sensor.globaler_strompreis_aktuell') | float(0.30)) | round(2) }}
+
+      - name: "EC Kosten Hue White Monat"
+        unique_id: ec_cost_hue_white_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {{ (states('sensor.ec_energy_hue_white_monthly') | float(0) *
+              states('sensor.globaler_strompreis_aktuell') | float(0.30)) | round(2) }}
+
+      - name: "EC Kosten Hue Color Monat"
+        unique_id: ec_cost_hue_color_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {{ (states('sensor.ec_energy_hue_color_monthly') | float(0) *
+              states('sensor.globaler_strompreis_aktuell') | float(0.30)) | round(2) }}
+
+      - name: "EC Kosten Hue Go Monat"
+        unique_id: ec_cost_hue_go_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {{ (states('sensor.ec_energy_hue_go_monthly') | float(0) *
+              states('sensor.globaler_strompreis_aktuell') | float(0.30)) | round(2) }}
+
+      - name: "EC Kosten Hue Gradient Monat"
+        unique_id: ec_cost_hue_gradient_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {{ (states('sensor.ec_energy_hue_gradient_monthly') | float(0) *
+              states('sensor.globaler_strompreis_aktuell') | float(0.30)) | round(2) }}
+
+      - name: "EC Kosten Hue Lightstrip Monat"
+        unique_id: ec_cost_hue_lightstrip_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {{ (states('sensor.ec_energy_hue_lightstrip_monthly') | float(0) *
+              states('sensor.globaler_strompreis_aktuell') | float(0.30)) | round(2) }}
+
+      # -- Andere Lampen --
+      - name: "EC Kosten Aqara GU10 Monat"
+        unique_id: ec_cost_aqara_gu10_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {{ (states('sensor.ec_energy_aqara_gu10_monthly') | float(0) *
+              states('sensor.globaler_strompreis_aktuell') | float(0.30)) | round(2) }}
+
+      - name: "EC Kosten IKEA GU10 Monat"
+        unique_id: ec_cost_ikea_gu10_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {{ (states('sensor.ec_energy_ikea_gu10_monthly') | float(0) *
+              states('sensor.globaler_strompreis_aktuell') | float(0.30)) | round(2) }}
+
+      - name: "EC Kosten Nanoleaf Stehlampe Monat"
+        unique_id: ec_cost_nanoleaf_stehlampe_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {{ (states('sensor.ec_energy_nanoleaf_stehlampe_monthly') | float(0) *
+              states('sensor.globaler_strompreis_aktuell') | float(0.30)) | round(2) }}
+
+      - name: "EC Kosten Nanoleaf Holiday Monat"
+        unique_id: ec_cost_nanoleaf_holiday_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {{ (states('sensor.ec_energy_nanoleaf_holiday_monthly') | float(0) *
+              states('sensor.globaler_strompreis_aktuell') | float(0.30)) | round(2) }}
+
+      # -- Studio --
+      - name: "EC Kosten Studio Virtuell Monat"
+        unique_id: ec_cost_studio_virtuell_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {{ (states('sensor.ec_energy_studio_virtuell_monthly') | float(0) *
+              states('sensor.globaler_strompreis_aktuell') | float(0.30)) | round(2) }}
+
+      - name: "EC Kosten Studio Gemessen Monat"
+        unique_id: ec_cost_studio_gemessen_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash
+        state: >
+          {% set preis = states('sensor.globaler_strompreis_aktuell') | float(0.30) %}
+          {% set h90 = states('sensor.ec_h90_kwh_monthly') | float(0) %}
+          {% set pedal = states('sensor.ec_pedal_kwh_monthly') | float(0) %}
+          {% set lvx = states('sensor.ec_lvx_kwh_monthly') | float(0) %}
+          {{ ((h90 + pedal + lvx) * preis) | round(2) }}
+
+      # ──────────────────────────────────────────────────────────────
+      # KATEGORIE-KOSTEN (Monat)
+      # ──────────────────────────────────────────────────────────────
+
+      - name: "EC Kosten Beleuchtung Monat"
+        unique_id: ec_cost_beleuchtung_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:lightbulb-group
+        state: >
+          {% set preis = states('sensor.globaler_strompreis_aktuell') | float(0.30) %}
+          {% set s = [
+            'sensor.ec_energy_hue_play_monthly',
+            'sensor.ec_energy_hue_white_monthly',
+            'sensor.ec_energy_hue_color_monthly',
+            'sensor.ec_energy_hue_go_monthly',
+            'sensor.ec_energy_hue_gradient_monthly',
+            'sensor.ec_energy_hue_lightstrip_monthly',
+            'sensor.ec_energy_aqara_gu10_monthly',
+            'sensor.ec_energy_ikea_gu10_monthly',
+            'sensor.ec_energy_nanoleaf_stehlampe_monthly',
+            'sensor.ec_energy_nanoleaf_holiday_monthly'
+          ] %}
+          {% set ns = namespace(total=0) %}
+          {% for e in s %}
+            {% set ns.total = ns.total + states(e) | float(0) %}
+          {% endfor %}
+          {{ (ns.total * preis) | round(2) }}
+
+      - name: "EC Kosten Studio Monat"
+        unique_id: ec_cost_studio_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:music
+        state: >
+          {% set v = states('sensor.ec_kosten_studio_virtuell_monat') | float(0) %}
+          {% set g = states('sensor.ec_kosten_studio_gemessen_monat') | float(0) %}
+          {{ (v + g) | round(2) }}
+
+      - name: "EC Kosten Haushalt Monat"
+        unique_id: ec_cost_haushalt_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:home-lightning-bolt
+        state: >
+          {% set preis = states('sensor.globaler_strompreis_aktuell') | float(0.30) %}
+          {% set wm = states('sensor.bz_waschmaschine_kwh_month') | float(0) %}
+          {% set sm = states('sensor.ku_spuelmaschine_kwh_month') | float(0) %}
+          {{ ((wm + sm) * preis) | round(2) }}
+
+      # GRAND TOTAL Kosten
+      - name: "EC Kosten Gesamt Monat"
+        unique_id: ec_cost_gesamt_monthly
+        unit_of_measurement: "EUR"
+        state_class: total
+        icon: mdi:cash-multiple
+        state: >
+          {% set bel = states('sensor.ec_kosten_beleuchtung_monat') | float(0) %}
+          {% set stu = states('sensor.ec_kosten_studio_monat') | float(0) %}
+          {% set hau = states('sensor.ec_kosten_haushalt_monat') | float(0) %}
+          {{ (bel + stu + hau) | round(2) }}
+
+      # ──────────────────────────────────────────────────────────────
+      # KATEGORIE-VERBRAUCH kWh (Monat)
+      # ──────────────────────────────────────────────────────────────
+
+      - name: "EC Verbrauch Beleuchtung Monat"
+        unique_id: ec_kwh_beleuchtung_monthly
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total
+        icon: mdi:lightbulb-group
+        state: >
+          {% set s = [
+            'sensor.ec_energy_hue_play_monthly',
+            'sensor.ec_energy_hue_white_monthly',
+            'sensor.ec_energy_hue_color_monthly',
+            'sensor.ec_energy_hue_go_monthly',
+            'sensor.ec_energy_hue_gradient_monthly',
+            'sensor.ec_energy_hue_lightstrip_monthly',
+            'sensor.ec_energy_aqara_gu10_monthly',
+            'sensor.ec_energy_ikea_gu10_monthly',
+            'sensor.ec_energy_nanoleaf_stehlampe_monthly',
+            'sensor.ec_energy_nanoleaf_holiday_monthly'
+          ] %}
+          {% set ns = namespace(total=0) %}
+          {% for e in s %}
+            {% set ns.total = ns.total + states(e) | float(0) %}
+          {% endfor %}
+          {{ ns.total | round(3) }}
+
+      - name: "EC Verbrauch Studio Monat"
+        unique_id: ec_kwh_studio_monthly
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total
+        icon: mdi:music
+        state: >
+          {% set v = states('sensor.ec_energy_studio_virtuell_monthly') | float(0) %}
+          {% set h90 = states('sensor.ec_h90_kwh_monthly') | float(0) %}
+          {% set pedal = states('sensor.ec_pedal_kwh_monthly') | float(0) %}
+          {% set lvx = states('sensor.ec_lvx_kwh_monthly') | float(0) %}
+          {{ (v + h90 + pedal + lvx) | round(3) }}
+
+      - name: "EC Verbrauch Haushalt Monat"
+        unique_id: ec_kwh_haushalt_monthly
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total
+        icon: mdi:home-lightning-bolt
+        state: >
+          {% set wm = states('sensor.bz_waschmaschine_kwh_month') | float(0) %}
+          {% set sm = states('sensor.ku_spuelmaschine_kwh_month') | float(0) %}
+          {{ (wm + sm) | round(3) }}
+
+      - name: "EC Verbrauch Gesamt Monat"
+        unique_id: ec_kwh_gesamt_monthly
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total
+        icon: mdi:flash
+        state: >
+          {% set bel = states('sensor.ec_verbrauch_beleuchtung_monat') | float(0) %}
+          {% set stu = states('sensor.ec_verbrauch_studio_monat') | float(0) %}
+          {% set hau = states('sensor.ec_verbrauch_haushalt_monat') | float(0) %}
+          {{ (bel + stu + hau) | round(3) }}
+
+      # ──────────────────────────────────────────────────────────────
+      # JAHRESHOCHRECHNUNG + TARIFVERGLEICH
+      # ──────────────────────────────────────────────────────────────
+
+      - name: "EC Hochrechnung Jahr"
+        unique_id: ec_projection_yearly
+        unit_of_measurement: "EUR"
+        icon: mdi:chart-timeline-variant
+        state: >
+          {% set monat_kosten = states('sensor.ec_kosten_gesamt_monat') | float(0) %}
+          {% set tag = now().day %}
+          {% if tag > 0 %}
+            {{ (monat_kosten / tag * 365) | round(2) }}
+          {% else %}
+            0
+          {% endif %}
+
+      - name: "EC Tarifvergleich Ersparnis"
+        unique_id: ec_tarif_ersparnis
+        unit_of_measurement: "EUR"
+        icon: mdi:piggy-bank-outline
+        state: >
+          {% set bel_y = states('sensor.ec_energy_beleuchtung_yearly') | float(0) %}
+          {% set stu_v_y = states('sensor.ec_energy_studio_virtuell_yearly') | float(0) %}
+          {% set h90_y = states('sensor.ec_h90_kwh_yearly') | float(0) %}
+          {% set pedal_y = states('sensor.ec_pedal_kwh_yearly') | float(0) %}
+          {% set lvx_y = states('sensor.ec_lvx_kwh_yearly') | float(0) %}
+          {% set wm_y = states('sensor.bz_waschmaschine_kwh_year') | float(0) %}
+          {% set sm_y = states('sensor.ku_spuelmaschine_kwh_year') | float(0) %}
+          {% set jahres_kwh = bel_y + stu_v_y + h90_y + pedal_y + lvx_y + wm_y + sm_y %}
+          {% set tag = now().timetuple().tm_yday %}
+          {% if tag > 0 %}
+            {% set hoch_kwh = (jahres_kwh / tag) * 365 %}
+          {% else %}
+            {% set hoch_kwh = 0 %}
+          {% endif %}
+          {% set alter = states('input_number.ec_alter_tarif') | float(0.35) %}
+          {% set neuer = states('input_number.ec_neuer_tarif') | float(0.30) %}
+          {{ (hoch_kwh * (alter - neuer)) | round(2) }}
+
+      # ──────────────────────────────────────────────────────────────
+      # TOP VERBRAUCHER (alle Kategorien, sortiert)
+      # ──────────────────────────────────────────────────────────────
+
+      - name: "EC Top Verbraucher"
+        unique_id: ec_top_verbraucher
+        icon: mdi:podium
+        state: >
+          {% set types = [
+            ('Hue White 7x', states('sensor.ec_energy_hue_white_monthly') | float(0)),
+            ('Hue Lightstrip 3x', states('sensor.ec_energy_hue_lightstrip_monthly') | float(0)),
+            ('Studio (virt.)', states('sensor.ec_energy_studio_virtuell_monthly') | float(0)),
+            ('Hue Gradient', states('sensor.ec_energy_hue_gradient_monthly') | float(0)),
+            ('Nanoleaf Stehlampe', states('sensor.ec_energy_nanoleaf_stehlampe_monthly') | float(0)),
+            ('Waschmaschine', states('sensor.bz_waschmaschine_kwh_month') | float(0)),
+            ('Spuelmaschine', states('sensor.ku_spuelmaschine_kwh_month') | float(0)),
+            ('Hue Color 2x', states('sensor.ec_energy_hue_color_monthly') | float(0)),
+            ('Aqara GU10 3x', states('sensor.ec_energy_aqara_gu10_monthly') | float(0)),
+            ('IKEA GU10 2x', states('sensor.ec_energy_ikea_gu10_monthly') | float(0)),
+            ('Hue Play', states('sensor.ec_energy_hue_play_monthly') | float(0)),
+            ('Hue Go', states('sensor.ec_energy_hue_go_monthly') | float(0)),
+            ('Nanoleaf Holiday', states('sensor.ec_energy_nanoleaf_holiday_monthly') | float(0))
+          ] %}
+          {% set sorted = types | sort(attribute='1', reverse=true) %}
+          {{ sorted[0][0] }} ({{ (sorted[0][1]) | round(2) }} kWh)
+        attributes:
+          ranking: >
+            {% set preis = states('sensor.globaler_strompreis_aktuell') | float(0.30) %}
+            {% set types = [
+              {'name': 'Hue White (7x)', 'kwh': states('sensor.ec_energy_hue_white_monthly') | float(0)},
+              {'name': 'Hue Lightstrip (3x)', 'kwh': states('sensor.ec_energy_hue_lightstrip_monthly') | float(0)},
+              {'name': 'Studio virtuell', 'kwh': states('sensor.ec_energy_studio_virtuell_monthly') | float(0)},
+              {'name': 'Hue Gradient', 'kwh': states('sensor.ec_energy_hue_gradient_monthly') | float(0)},
+              {'name': 'Nanoleaf Stehlampe', 'kwh': states('sensor.ec_energy_nanoleaf_stehlampe_monthly') | float(0)},
+              {'name': 'Waschmaschine', 'kwh': states('sensor.bz_waschmaschine_kwh_month') | float(0)},
+              {'name': 'Spuelmaschine', 'kwh': states('sensor.ku_spuelmaschine_kwh_month') | float(0)},
+              {'name': 'Hue Color (2x)', 'kwh': states('sensor.ec_energy_hue_color_monthly') | float(0)},
+              {'name': 'Aqara GU10 (3x)', 'kwh': states('sensor.ec_energy_aqara_gu10_monthly') | float(0)},
+              {'name': 'IKEA GU10 (2x)', 'kwh': states('sensor.ec_energy_ikea_gu10_monthly') | float(0)},
+              {'name': 'Hue Play', 'kwh': states('sensor.ec_energy_hue_play_monthly') | float(0)},
+              {'name': 'Hue Go', 'kwh': states('sensor.ec_energy_hue_go_monthly') | float(0)},
+              {'name': 'Nanoleaf Holiday', 'kwh': states('sensor.ec_energy_nanoleaf_holiday_monthly') | float(0)}
+            ] %}
+            {% set ns = namespace(result=[]) %}
+            {% for t in types | sort(attribute='kwh', reverse=true) %}
+              {% if t.kwh > 0 %}
+                {% set ns.result = ns.result + [t.name ~ ': ' ~ (t.kwh | round(3)) ~ ' kWh (' ~ (t.kwh * preis) | round(2) ~ ' EUR)'] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.result }}
+
+
+# ========================================================================
+# 3. INTEGRATION-SENSOREN: W -> kWh (Riemann left)
+#    NUR fuer virtuelle Sensoren – echte haben bereits _summe_verbraucht
+# ========================================================================
+
+sensor:
+
+  # Hue Typen
+  - platform: integration
+    source: sensor.ec_leistung_hue_play
+    name: "EC Energy Hue Play"
+    unique_id: ec_energy_hue_play
+    unit_prefix: k
+    round: 4
+    method: left
+
+  - platform: integration
+    source: sensor.ec_leistung_hue_white
+    name: "EC Energy Hue White"
+    unique_id: ec_energy_hue_white
+    unit_prefix: k
+    round: 4
+    method: left
+
+  - platform: integration
+    source: sensor.ec_leistung_hue_color
+    name: "EC Energy Hue Color"
+    unique_id: ec_energy_hue_color
+    unit_prefix: k
+    round: 4
+    method: left
+
+  - platform: integration
+    source: sensor.ec_leistung_hue_go
+    name: "EC Energy Hue Go"
+    unique_id: ec_energy_hue_go
+    unit_prefix: k
+    round: 4
+    method: left
+
+  - platform: integration
+    source: sensor.ec_leistung_hue_gradient
+    name: "EC Energy Hue Gradient"
+    unique_id: ec_energy_hue_gradient
+    unit_prefix: k
+    round: 4
+    method: left
+
+  - platform: integration
+    source: sensor.ec_leistung_hue_lightstrip
+    name: "EC Energy Hue Lightstrip"
+    unique_id: ec_energy_hue_lightstrip
+    unit_prefix: k
+    round: 4
+    method: left
+
+  # Andere Lampen
+  - platform: integration
+    source: sensor.ec_leistung_aqara_gu10
+    name: "EC Energy Aqara GU10"
+    unique_id: ec_energy_aqara_gu10
+    unit_prefix: k
+    round: 4
+    method: left
+
+  - platform: integration
+    source: sensor.ec_leistung_ikea_gu10
+    name: "EC Energy IKEA GU10"
+    unique_id: ec_energy_ikea_gu10
+    unit_prefix: k
+    round: 4
+    method: left
+
+  - platform: integration
+    source: sensor.ec_leistung_nanoleaf_stehlampe
+    name: "EC Energy Nanoleaf Stehlampe"
+    unique_id: ec_energy_nanoleaf_stehlampe
+    unit_prefix: k
+    round: 4
+    method: left
+
+  - platform: integration
+    source: sensor.ec_leistung_nanoleaf_holiday
+    name: "EC Energy Nanoleaf Holiday"
+    unique_id: ec_energy_nanoleaf_holiday
+    unit_prefix: k
+    round: 4
+    method: left
+
+  # Studio virtuell
+  - platform: integration
+    source: sensor.ec_leistung_studio_virtuell
+    name: "EC Energy Studio Virtuell"
+    unique_id: ec_energy_studio_virtuell
+    unit_prefix: k
+    round: 4
+    method: left
+
+  # Beleuchtung Gesamt (fuer Energy Dashboard)
+  - platform: integration
+    source: sensor.ec_leistung_beleuchtung
+    name: "EC Energy Beleuchtung"
+    unique_id: ec_energy_beleuchtung
+    unit_prefix: k
+    round: 4
+    method: left
+
+
+# ========================================================================
+# 4. UTILITY METER: daily / monthly / yearly
+# ========================================================================
+
+utility_meter:
+
+  # ── Hue Play ──
+  ec_energy_hue_play_daily:
+    source: sensor.ec_energy_hue_play
+    name: "EC Hue Play Tag"
+    cycle: daily
+  ec_energy_hue_play_monthly:
+    source: sensor.ec_energy_hue_play
+    name: "EC Hue Play Monat"
+    cycle: monthly
+  ec_energy_hue_play_yearly:
+    source: sensor.ec_energy_hue_play
+    name: "EC Hue Play Jahr"
+    cycle: yearly
+
+  # ── Hue White ──
+  ec_energy_hue_white_daily:
+    source: sensor.ec_energy_hue_white
+    name: "EC Hue White Tag"
+    cycle: daily
+  ec_energy_hue_white_monthly:
+    source: sensor.ec_energy_hue_white
+    name: "EC Hue White Monat"
+    cycle: monthly
+  ec_energy_hue_white_yearly:
+    source: sensor.ec_energy_hue_white
+    name: "EC Hue White Jahr"
+    cycle: yearly
+
+  # ── Hue Color ──
+  ec_energy_hue_color_daily:
+    source: sensor.ec_energy_hue_color
+    name: "EC Hue Color Tag"
+    cycle: daily
+  ec_energy_hue_color_monthly:
+    source: sensor.ec_energy_hue_color
+    name: "EC Hue Color Monat"
+    cycle: monthly
+  ec_energy_hue_color_yearly:
+    source: sensor.ec_energy_hue_color
+    name: "EC Hue Color Jahr"
+    cycle: yearly
+
+  # ── Hue Go ──
+  ec_energy_hue_go_daily:
+    source: sensor.ec_energy_hue_go
+    name: "EC Hue Go Tag"
+    cycle: daily
+  ec_energy_hue_go_monthly:
+    source: sensor.ec_energy_hue_go
+    name: "EC Hue Go Monat"
+    cycle: monthly
+  ec_energy_hue_go_yearly:
+    source: sensor.ec_energy_hue_go
+    name: "EC Hue Go Jahr"
+    cycle: yearly
+
+  # ── Hue Gradient ──
+  ec_energy_hue_gradient_daily:
+    source: sensor.ec_energy_hue_gradient
+    name: "EC Hue Gradient Tag"
+    cycle: daily
+  ec_energy_hue_gradient_monthly:
+    source: sensor.ec_energy_hue_gradient
+    name: "EC Hue Gradient Monat"
+    cycle: monthly
+  ec_energy_hue_gradient_yearly:
+    source: sensor.ec_energy_hue_gradient
+    name: "EC Hue Gradient Jahr"
+    cycle: yearly
+
+  # ── Hue Lightstrip ──
+  ec_energy_hue_lightstrip_daily:
+    source: sensor.ec_energy_hue_lightstrip
+    name: "EC Hue Lightstrip Tag"
+    cycle: daily
+  ec_energy_hue_lightstrip_monthly:
+    source: sensor.ec_energy_hue_lightstrip
+    name: "EC Hue Lightstrip Monat"
+    cycle: monthly
+  ec_energy_hue_lightstrip_yearly:
+    source: sensor.ec_energy_hue_lightstrip
+    name: "EC Hue Lightstrip Jahr"
+    cycle: yearly
+
+  # ── Aqara GU10 ──
+  ec_energy_aqara_gu10_daily:
+    source: sensor.ec_energy_aqara_gu10
+    name: "EC Aqara GU10 Tag"
+    cycle: daily
+  ec_energy_aqara_gu10_monthly:
+    source: sensor.ec_energy_aqara_gu10
+    name: "EC Aqara GU10 Monat"
+    cycle: monthly
+  ec_energy_aqara_gu10_yearly:
+    source: sensor.ec_energy_aqara_gu10
+    name: "EC Aqara GU10 Jahr"
+    cycle: yearly
+
+  # ── IKEA GU10 ──
+  ec_energy_ikea_gu10_daily:
+    source: sensor.ec_energy_ikea_gu10
+    name: "EC IKEA GU10 Tag"
+    cycle: daily
+  ec_energy_ikea_gu10_monthly:
+    source: sensor.ec_energy_ikea_gu10
+    name: "EC IKEA GU10 Monat"
+    cycle: monthly
+  ec_energy_ikea_gu10_yearly:
+    source: sensor.ec_energy_ikea_gu10
+    name: "EC IKEA GU10 Jahr"
+    cycle: yearly
+
+  # ── Nanoleaf Stehlampe ──
+  ec_energy_nanoleaf_stehlampe_daily:
+    source: sensor.ec_energy_nanoleaf_stehlampe
+    name: "EC Nanoleaf Stehlampe Tag"
+    cycle: daily
+  ec_energy_nanoleaf_stehlampe_monthly:
+    source: sensor.ec_energy_nanoleaf_stehlampe
+    name: "EC Nanoleaf Stehlampe Monat"
+    cycle: monthly
+  ec_energy_nanoleaf_stehlampe_yearly:
+    source: sensor.ec_energy_nanoleaf_stehlampe
+    name: "EC Nanoleaf Stehlampe Jahr"
+    cycle: yearly
+
+  # ── Nanoleaf Holiday ──
+  ec_energy_nanoleaf_holiday_daily:
+    source: sensor.ec_energy_nanoleaf_holiday
+    name: "EC Nanoleaf Holiday Tag"
+    cycle: daily
+  ec_energy_nanoleaf_holiday_monthly:
+    source: sensor.ec_energy_nanoleaf_holiday
+    name: "EC Nanoleaf Holiday Monat"
+    cycle: monthly
+  ec_energy_nanoleaf_holiday_yearly:
+    source: sensor.ec_energy_nanoleaf_holiday
+    name: "EC Nanoleaf Holiday Jahr"
+    cycle: yearly
+
+  # ── Studio Virtuell ──
+  ec_energy_studio_virtuell_daily:
+    source: sensor.ec_energy_studio_virtuell
+    name: "EC Studio Virtuell Tag"
+    cycle: daily
+  ec_energy_studio_virtuell_monthly:
+    source: sensor.ec_energy_studio_virtuell
+    name: "EC Studio Virtuell Monat"
+    cycle: monthly
+  ec_energy_studio_virtuell_yearly:
+    source: sensor.ec_energy_studio_virtuell
+    name: "EC Studio Virtuell Jahr"
+    cycle: yearly
+
+  # ── Beleuchtung Gesamt ──
+  ec_energy_beleuchtung_daily:
+    source: sensor.ec_energy_beleuchtung
+    name: "EC Beleuchtung Tag"
+    cycle: daily
+  ec_energy_beleuchtung_monthly:
+    source: sensor.ec_energy_beleuchtung
+    name: "EC Beleuchtung Monat"
+    cycle: monthly
+  ec_energy_beleuchtung_yearly:
+    source: sensor.ec_energy_beleuchtung
+    name: "EC Beleuchtung Jahr"
+    cycle: yearly
+
+  # ── Studio Gemessen: H90 (echte kWh) ──
+  ec_h90_kwh_daily:
+    source: sensor.third_reality_inc_3rspe01044bz_summe_verbraucht_2
+    name: "EC H90 Tag"
+    cycle: daily
+  ec_h90_kwh_monthly:
+    source: sensor.third_reality_inc_3rspe01044bz_summe_verbraucht_2
+    name: "EC H90 Monat"
+    cycle: monthly
+  ec_h90_kwh_yearly:
+    source: sensor.third_reality_inc_3rspe01044bz_summe_verbraucht_2
+    name: "EC H90 Jahr"
+    cycle: yearly
+
+  # ── Studio Gemessen: Pedal 02 (echte kWh) ──
+  ec_pedal_kwh_daily:
+    source: sensor.az_pedal_02_summe_verbraucht
+    name: "EC Pedal Tag"
+    cycle: daily
+  ec_pedal_kwh_monthly:
+    source: sensor.az_pedal_02_summe_verbraucht
+    name: "EC Pedal Monat"
+    cycle: monthly
+  ec_pedal_kwh_yearly:
+    source: sensor.az_pedal_02_summe_verbraucht
+    name: "EC Pedal Jahr"
+    cycle: yearly
+
+  # ── Studio Gemessen: Meris LVX (echte kWh) ──
+  ec_lvx_kwh_daily:
+    source: sensor.meris_lvx_summe_verbraucht
+    name: "EC LVX Tag"
+    cycle: daily
+  ec_lvx_kwh_monthly:
+    source: sensor.meris_lvx_summe_verbraucht
+    name: "EC LVX Monat"
+    cycle: monthly
+  ec_lvx_kwh_yearly:
+    source: sensor.meris_lvx_summe_verbraucht
+    name: "EC LVX Jahr"
+    cycle: yearly
+
+
+# ========================================================================
+# 5. AUTOMATIONS
+# ========================================================================
+
+automation:
+
+  # Warnung: Gesamt-Monatskosten > 15 EUR
+  - id: ec_kosten_warnung
+    alias: "EC Monatskosten-Warnung"
+    description: "Push wenn Gesamt-Monatskosten 15 EUR ueberschreiten"
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.ec_kosten_gesamt_monat
+        above: 15
+    condition:
+      - condition: template
+        value_template: >
+          {% set last = state_attr('automation.ec_monatskosten_warnung', 'last_triggered') %}
+          {{ last is none or (now() - last).days > 25 }}
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Energie-Cockpit: Kostenwarnung"
+          message: >
+            Monatskosten: {{ states('sensor.ec_kosten_gesamt_monat') }} EUR
+            ({{ states('sensor.ec_verbrauch_gesamt_monat') }} kWh).
+            Beleuchtung: {{ states('sensor.ec_kosten_beleuchtung_monat') }} EUR |
+            Studio: {{ states('sensor.ec_kosten_studio_monat') }} EUR |
+            Haushalt: {{ states('sensor.ec_kosten_haushalt_monat') }} EUR
+          data:
+            push:
+              sound: default
+              interruption-level: active
+
+  # Tarifwechsel pruefen: Ersparnis > 100 EUR/Jahr
+  - id: ec_tarifwechsel_pruefen
+    alias: "EC Tarifwechsel pruefen"
+    description: "Push wenn Tarifwechsel-Ersparnis 100 EUR/Jahr ueberschreitet"
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.ec_tarifvergleich_ersparnis
+        above: 100
+    condition:
+      - condition: template
+        value_template: >
+          {% set last = state_attr('automation.ec_tarifwechsel_pruefen', 'last_triggered') %}
+          {{ last is none or (now() - last).days > 30 }}
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Energie-Cockpit: Tarifwechsel pruefen!"
+          message: >
+            Wechsel von {{ states('input_number.ec_alter_tarif') }} auf
+            {{ states('input_number.ec_neuer_tarif') }} EUR/kWh spart ca.
+            {{ states('sensor.ec_tarifvergleich_ersparnis') }} EUR/Jahr.
+          data:
+            push:
+              sound: default
+              interruption-level: time-sensitive

@@ -1,0 +1,877 @@
+# ==============================================================================
+# PACKAGE: Anwesenheitssteuerung (Presence Detection)
+#
+# FUNKTIONSWEISE:
+# 1. Letzte Person verlaesst "Home"-Zone -> Verzoegerungs-Timer startet
+# 2. Timer laeuft ab + Geraete-Check bestaetigt Abwesenheit ->
+#    Abwesenheitsmodus: Heizung Master AUS, alle Lichter AUS
+#    + Warnung bei offenen Fenstern
+# 3. Jemand kommt waehrend Timer laeuft zurueck -> Timer abbrechen
+# 4. Erste Person betritt "Nahbereich"-Zone -> Heizung Master EIN (Vorwaermen)
+# 5. Erste Person betritt "Home"-Zone -> Abwesenheitsmodus beenden
+# 6. HA Neustart -> Zustand pruefen
+#
+# SICHERHEITSNETZ (Geraete-Check):
+# - Bevor Abwesenheitsmodus aktiviert wird, prueft die Automation
+#   ob KEIN iPhone zuhause ist (Device Tracker + SSID als Fallback).
+# - Verhindert Fehlausloesungen durch GPS-Drift.
+#
+# HINWEIS ZU SSID-SENSOREN:
+# - iOS liefert den SSID-Wert nur zuverlaessig, wenn die Companion App
+#   im Vordergrund ist oder kuerzlich Standortdaten gesendet hat.
+# - Daher wird PRIMAER der device_tracker genutzt (zuverlaessiger).
+# - Die SSID-Sensoren dienen als ZUSAETZLICHES Sicherheitsnetz.
+#
+# TESTMODUS:
+# - input_boolean.zs_anwesenheit_testmodus aktivieren
+# - Es werden NUR Benachrichtigungen gesendet, nichts geschaltet
+# - Empfehlung: Erst ein paar Tage im Testmodus laufen lassen
+#
+# VORAUSSETZUNGEN:
+# - Zone "Nahbereich" in HA anlegen:
+#   Einstellungen -> Zonen -> Zone hinzufuegen
+#   Name: Nahbereich | Radius: 750m | Passiv: JA
+#   Mittelpunkt: gleiche Adresse wie Home-Zone
+#
+# Personen:
+# - person.oliver_vollmer (device_tracker.iphone_15_pro_max_von_oliver)
+# - person.freweini_tzeggai (device_tracker.iphone_weini_2)
+#
+# WLAN-Sensoren (Fallback):
+# - sensor.iphone_15_pro_max_von_oliver_ssid
+# - sensor.iphone_weini_ssid
+#
+# Fenster-Sensoren (fuer Abwesenheitswarnung):
+# - binary_sensor.az_fenster_01_offnung
+# - binary_sensor.bz_fenster_01
+# - binary_sensor.wz_fenstergruppe_01
+# - binary_sensor.ku_fenstergruppe_01
+# - binary_sensor.ki_fenstergruppe_01
+# - binary_sensor.sz_fenster_01
+#
+# Externe Abhaengigkeiten:
+# - input_boolean.zs_heizung_master (aus heating_global.yaml)
+# - Lichter (aus nachtlicht.yaml + Flur)
+#
+# Notify:
+# - notify.mobile_app_iphone_15_pro_max_von_oliver
+# - notify.mobile_app_iphone_weini
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# HELFER
+# ------------------------------------------------------------------------------
+
+input_boolean:
+  zs_anwesenheit_master:
+    name: ZS - Anwesenheit Master
+    icon: mdi:home-account
+
+  zs_abwesenheitsmodus:
+    name: ZS - Abwesenheitsmodus aktiv
+    icon: mdi:home-export-outline
+
+  zs_anwesenheit_gaestemodus:
+    name: ZS - Gaestemodus
+    icon: mdi:account-child
+
+  zs_anwesenheit_testmodus:
+    name: ZS - Anwesenheit Testmodus
+    icon: mdi:test-tube
+
+input_number:
+  zs_anwesenheit_delay:
+    name: ZS - Abwesenheit Verzoegerung (Minuten)
+    min: 1
+    max: 30
+    step: 1
+    unit_of_measurement: "min"
+    mode: slider
+    icon: mdi:timer-outline
+    initial: 5
+
+# ------------------------------------------------------------------------------
+# TIMER
+# ------------------------------------------------------------------------------
+
+timer:
+  zs_anwesenheit_abwesend:
+    name: ZS - Abwesenheit Verzoegerungstimer
+    restore: true
+
+# ------------------------------------------------------------------------------
+# TEMPLATE-SENSOREN
+# ------------------------------------------------------------------------------
+
+template:
+  - binary_sensor:
+      # -- Jemand Zuhause (GPS) --
+      - name: ZS - Jemand Zuhause
+        unique_id: zs_jemand_zuhause
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:home-account
+          {% else %}
+            mdi:home-outline
+          {% endif %}
+        state: >
+          {{ is_state('person.oliver_vollmer', 'home')
+             or is_state('person.freweini_tzeggai', 'home') }}
+
+      # -- Niemand Zuhause (GPS) --
+      - name: ZS - Niemand Zuhause
+        unique_id: zs_niemand_zuhause
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:home-off-outline
+          {% else %}
+            mdi:home-account
+          {% endif %}
+        state: >
+          {{ not is_state('person.oliver_vollmer', 'home')
+             and not is_state('person.freweini_tzeggai', 'home') }}
+
+      # -- Geraet Zuhause (Device Tracker) --
+      # PRIMAERES Sicherheitsnetz: Prueft ob ein iPhone vom Device Tracker
+      # als "home" gemeldet wird. Deutlich zuverlaessiger als SSID-Sensoren!
+      - name: ZS - Geraet Zuhause
+        unique_id: zs_geraet_zuhause
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:cellphone-check
+          {% else %}
+            mdi:cellphone-off
+          {% endif %}
+        state: >
+          {{ is_state('device_tracker.iphone_15_pro_max_von_oliver', 'home')
+             or is_state('device_tracker.iphone_weini_2', 'home') }}
+
+      # -- Jemand im WLAN (SSID) --
+      # SEKUNDAERES Sicherheitsnetz: Prueft SSID-Verbindung.
+      # ACHTUNG: iOS meldet SSID oft als "Not Connected" im Hintergrund!
+      # Daher nur als zusaetzliche Absicherung, nicht als primaere Quelle.
+      - name: ZS - Jemand im WLAN
+        unique_id: zs_jemand_im_wlan
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:wifi-check
+          {% else %}
+            mdi:wifi-off
+          {% endif %}
+        state: >
+          {% set oliver_ssid = states('sensor.iphone_15_pro_max_von_oliver_ssid') | lower %}
+          {% set weini_ssid = states('sensor.iphone_weini_ssid') | lower %}
+          {{ 'gangstazparadise' in oliver_ssid
+             or 'gangstazparadise' in weini_ssid }}
+
+      # -- Wirklich niemand da --
+      # GPS sagt "weg" UND Device Tracker sagt "nicht home" UND WLAN nicht verbunden
+      # Alle drei muessen bestaetigen, dass niemand da ist!
+      - name: ZS - Wirklich niemand da
+        unique_id: zs_wirklich_niemand_da
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:home-off
+          {% else %}
+            mdi:home-account
+          {% endif %}
+        state: >
+          {{ is_state('binary_sensor.zs_niemand_zuhause', 'on')
+             and is_state('binary_sensor.zs_geraet_zuhause', 'off')
+             and is_state('binary_sensor.zs_jemand_im_wlan', 'off') }}
+
+      # -- Jemand im Nahbereich --
+      - name: ZS - Jemand im Nahbereich
+        unique_id: zs_jemand_im_nahbereich
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:home-import-outline
+          {% else %}
+            mdi:home-outline
+          {% endif %}
+        state: >
+          {% set oliver = states('person.oliver_vollmer') %}
+          {% set weini = states('person.freweini_tzeggai') %}
+          {{ oliver in ['home', 'Nahbereich']
+             or weini in ['home', 'Nahbereich'] }}
+
+  # -- Debug-Sensoren fuer Dashboard --
+  # Zeigen im Klartext, was die SSID-Sensoren tatsaechlich melden
+  - sensor:
+      - name: ZS - Oliver SSID Status
+        unique_id: zs_oliver_ssid_status
+        icon: mdi:wifi-cog
+        state: >
+          {% set ssid = states('sensor.iphone_15_pro_max_von_oliver_ssid') %}
+          {% if ssid in ['unknown', 'unavailable', 'None', ''] %}
+            Nicht verfuegbar
+          {% elif ssid == 'Not Connected' %}
+            Nicht verbunden
+          {% else %}
+            {{ ssid }}
+          {% endif %}
+
+      - name: ZS - Weini SSID Status
+        unique_id: zs_weini_ssid_status
+        icon: mdi:wifi-cog
+        state: >
+          {% set ssid = states('sensor.iphone_weini_ssid') %}
+          {% if ssid in ['unknown', 'unavailable', 'None', ''] %}
+            Nicht verfuegbar
+          {% elif ssid == 'Not Connected' %}
+            Nicht verbunden
+          {% else %}
+            {{ ssid }}
+          {% endif %}
+
+      - name: ZS - Oliver Tracker Status
+        unique_id: zs_oliver_tracker_status
+        icon: mdi:crosshairs-gps
+        state: >
+          {% set tracker = states('device_tracker.iphone_15_pro_max_von_oliver') %}
+          {% if tracker == 'home' %}
+            Zuhause
+          {% elif tracker == 'not_home' %}
+            Unterwegs
+          {% else %}
+            {{ tracker }}
+          {% endif %}
+
+      - name: ZS - Weini Tracker Status
+        unique_id: zs_weini_tracker_status
+        icon: mdi:crosshairs-gps
+        state: >
+          {% set tracker = states('device_tracker.iphone_weini_2') %}
+          {% if tracker == 'home' %}
+            Zuhause
+          {% elif tracker == 'not_home' %}
+            Unterwegs
+          {% else %}
+            {{ tracker }}
+          {% endif %}
+
+# ------------------------------------------------------------------------------
+# AUTOMATIONEN
+# ------------------------------------------------------------------------------
+
+automation:
+  # ==========================================================================
+  # 1) NIEMAND ZUHAUSE -> Verzoegerungstimer starten
+  # ==========================================================================
+  - id: zs_anwesenheit_niemand_da
+    alias: ZS - Anwesenheit Niemand zuhause
+    description: >
+      Letzte Person verlaesst Home-Zone: Verzoegerungstimer starten.
+      Gibt Zeit fuer kurz Muell rausbringen etc.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.zs_niemand_zuhause
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_anwesenheit_master
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.zs_anwesenheit_gaestemodus
+        state: "off"
+    action:
+      - service: timer.start
+        target:
+          entity_id: timer.zs_anwesenheit_abwesend
+        data:
+          duration: >
+            {{ '00:' ~ '%02d' | format(states('input_number.zs_anwesenheit_delay') | int(5)) ~ ':00' }}
+    mode: single
+
+  # ==========================================================================
+  # 2) JEMAND KOMMT ZURUECK -> Timer abbrechen
+  # ==========================================================================
+  - id: zs_anwesenheit_jemand_zurueck
+    alias: ZS - Anwesenheit Jemand zurueck (Timer)
+    description: >
+      Jemand kommt zurueck waehrend der Verzoegerungstimer noch laeuft:
+      Timer abbrechen, kein Abwesenheitsmodus.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.zs_jemand_zuhause
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: timer.zs_anwesenheit_abwesend
+        state: "active"
+    action:
+      - service: timer.cancel
+        target:
+          entity_id: timer.zs_anwesenheit_abwesend
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Willkommen zurueck"
+          message: "Abwesenheits-Timer abgebrochen - jemand ist wieder da."
+          data:
+            tag: anwesenheit
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Willkommen zurueck"
+          message: "Abwesenheits-Timer abgebrochen - jemand ist wieder da."
+          data:
+            tag: anwesenheit
+    mode: single
+
+  # ==========================================================================
+  # 3) TIMER ABGELAUFEN -> Abwesenheitsmodus aktivieren
+  #    Inkl. Fenster-Warnung wenn Fenster offen sind
+  # ==========================================================================
+  - id: zs_anwesenheit_abwesend_aktivieren
+    alias: ZS - Abwesenheitsmodus aktivieren
+    description: >
+      Verzoegerung abgelaufen: GPS (Person-Entities) pruefen.
+      Device-Tracker-Lag wird per Soft-Check mit 30s Wartezeit behandelt.
+      Wenn niemand da: Heizung aus, Lichter aus.
+      Warnung bei offenen Fenstern.
+      Im Testmodus nur Benachrichtigung.
+    trigger:
+      - platform: event
+        event_type: timer.finished
+        event_data:
+          entity_id: timer.zs_anwesenheit_abwesend
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_anwesenheit_master
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.zs_anwesenheit_gaestemodus
+        state: "off"
+      # Primaere Pruefung: Person-Entities (GPS) - zuverlaessigste Quelle.
+      # Device-Tracker-Pruefung erfolgt separat ueber Automation 4 waehrend
+      # des Timers. Die alte dreifache Pruefung (zs_wirklich_niemand_da)
+      # verhinderte die Aktivierung, weil device_tracker langsamer updaten.
+      - condition: state
+        entity_id: binary_sensor.zs_niemand_zuhause
+        state: "on"
+    action:
+      # Letzte Sicherheitspruefung: Falls ein Geraet noch "home" meldet,
+      # 30 Sekunden warten und nochmals pruefen (Device-Tracker-Lag).
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.zs_geraet_zuhause
+                state: "on"
+            sequence:
+              - delay:
+                  seconds: 30
+              - condition: state
+                entity_id: binary_sensor.zs_niemand_zuhause
+                state: "on"
+              # Falls Geraet IMMER NOCH zuhause meldet, trotzdem fortfahren
+              # aber Info-Notification senden (GPS hat Vorrang)
+              - choose:
+                  - conditions:
+                      - condition: state
+                        entity_id: binary_sensor.zs_geraet_zuhause
+                        state: "on"
+                    sequence:
+                      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+                        data:
+                          title: "Info: Device Tracker Lag"
+                          message: >
+                            GPS sagt: Niemand zuhause.
+                            Device Tracker meldet noch 'home' (Lag).
+                            Abwesenheitsmodus wird trotzdem aktiviert.
+                          data:
+                            tag: anwesenheit_debug
+                default: []
+        default: []
+
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.zs_abwesenheitsmodus
+
+      # -- Offene Fenster ermitteln --
+      - variables:
+          offene_fenster: >
+            {% set ns = namespace(liste=[]) %}
+            {% if is_state('binary_sensor.az_fenster_01_offnung', 'on') %}
+              {% set ns.liste = ns.liste + ['AZ Fenster'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.bz_fenster_01', 'on') %}
+              {% set ns.liste = ns.liste + ['BZ Fenster'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.wz_fenstergruppe_01', 'on') %}
+              {% set ns.liste = ns.liste + ['WZ Fenster'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.ku_fenstergruppe_01', 'on') %}
+              {% set ns.liste = ns.liste + ['KU Fenster'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.ki_fenstergruppe_01', 'on') %}
+              {% set ns.liste = ns.liste + ['KI Fenster'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.sz_fenster_01', 'on') %}
+              {% set ns.liste = ns.liste + ['SZ Fenster'] %}
+            {% endif %}
+            {{ ns.liste }}
+          fenster_warnung: >
+            {% set ns = namespace(liste=[]) %}
+            {% if is_state('binary_sensor.az_fenster_01_offnung', 'on') %}
+              {% set ns.liste = ns.liste + ['AZ Fenster'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.bz_fenster_01', 'on') %}
+              {% set ns.liste = ns.liste + ['BZ Fenster'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.wz_fenstergruppe_01', 'on') %}
+              {% set ns.liste = ns.liste + ['WZ Fenster'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.ku_fenstergruppe_01', 'on') %}
+              {% set ns.liste = ns.liste + ['KU Fenster'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.ki_fenstergruppe_01', 'on') %}
+              {% set ns.liste = ns.liste + ['KI Fenster'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.sz_fenster_01', 'on') %}
+              {% set ns.liste = ns.liste + ['SZ Fenster'] %}
+            {% endif %}
+            {% if ns.liste | count > 0 %}
+              Achtung: {{ ns.liste | join(', ') }} noch offen!
+            {% else %}
+              Alle Fenster geschlossen.
+            {% endif %}
+
+      - choose:
+          # --- TESTMODUS: Nur Benachrichtigung ---
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.zs_anwesenheit_testmodus
+                state: "on"
+            sequence:
+              - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+                data:
+                  title: "Testmodus - Abwesenheit erkannt"
+                  message: >
+                    Niemand zuhause (GPS + Geraete-Check bestaetigt).
+                    Oliver Tracker: {{ states('device_tracker.iphone_15_pro_max_von_oliver') }}
+                    Weini Tracker: {{ states('device_tracker.iphone_weini_2') }}
+                    Oliver SSID: {{ states('sensor.iphone_15_pro_max_von_oliver_ssid') }}
+                    Weini SSID: {{ states('sensor.iphone_weini_ssid') }}
+                    {{ fenster_warnung }}
+                    Im Echtbetrieb wuerde jetzt Heizung + Lichter ausgehen.
+                  data:
+                    tag: anwesenheit
+              - service: notify.mobile_app_iphone_weini
+                data:
+                  title: "Testmodus - Abwesenheit erkannt"
+                  message: >
+                    Niemand zuhause (GPS + Geraete-Check bestaetigt).
+                    {{ fenster_warnung }}
+                    Im Echtbetrieb wuerde jetzt Heizung + Lichter ausgehen.
+                  data:
+                    tag: anwesenheit
+
+        # --- ECHTBETRIEB: Alles ausschalten ---
+        default:
+          - service: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.zs_heizung_master
+
+          - service: light.turn_off
+            target:
+              entity_id:
+                - light.az_hangelampe_01
+                - light.az_schreibtischbeleuchtung_01
+                - light.az_stehlampe_01
+                - light.bz_strahler_01
+                - light.bz_strahler_02
+                - light.bz_strahler_03
+                - light.wz_hangelampe_01
+                - light.wz_kommodenlicht_01
+                - light.wz_sofalicht_01
+                - light.wz_stehlampe_01
+                - light.wz_stehlampe_02
+                - light.ku_wandstrahler_01
+                - light.ku_wandstrahler_02
+                - light.ku_deckenlampe_1
+                - light.ki_deckenlampe_01
+                - light.ki_hohlenlicht
+                - light.sz_tischlampe_01
+                - light.sz_deckenlampe_02
+                - light.fl_bodenbeleuchtung_01
+
+          # -- Benachrichtigung: Abwesenheitsmodus + Fensterstatus --
+          - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+            data:
+              title: "Abwesenheitsmodus aktiv"
+              message: >
+                Niemand zuhause - Heizung und Lichter ausgeschaltet.
+                {{ fenster_warnung }}
+              data:
+                tag: anwesenheit
+          - service: notify.mobile_app_iphone_weini
+            data:
+              title: "Abwesenheitsmodus aktiv"
+              message: >
+                Niemand zuhause - Heizung und Lichter ausgeschaltet.
+                {{ fenster_warnung }}
+              data:
+                tag: anwesenheit
+
+          # -- Kritische Fenster-Warnung (zusaetzlich, eigener Tag) --
+          # Nur wenn tatsaechlich Fenster offen sind.
+          # Eigener Tag damit sie NICHT von der Abwesenheitsmeldung
+          # ueberschrieben wird. Critical Alert auf iOS.
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ offene_fenster | length > 0 }}"
+                sequence:
+                  - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+                    data:
+                      title: "⚠ Fenster offen!"
+                      message: >
+                        Ihr seid weg, aber {{ offene_fenster | join(', ') }} noch offen!
+                      data:
+                        tag: anwesenheit_fenster
+                        push:
+                          sound:
+                            name: default
+                            critical: 1
+                            volume: 1.0
+                  - service: notify.mobile_app_iphone_weini
+                    data:
+                      title: "⚠ Fenster offen!"
+                      message: >
+                        Ihr seid weg, aber {{ offene_fenster | join(', ') }} noch offen!
+                      data:
+                        tag: anwesenheit_fenster
+                        push:
+                          sound:
+                            name: default
+                            critical: 1
+                            volume: 1.0
+            default: []
+
+          - service: persistent_notification.create
+            data:
+              title: "Abwesenheitsmodus aktiv"
+              message: >
+                Niemand zuhause (GPS + Geraete-Check bestaetigt).
+                Heizung Master AUS, alle Lichter AUS.
+                {{ fenster_warnung }}
+              notification_id: "anwesenheit"
+    mode: single
+
+  # ==========================================================================
+  # 4) GERAETE-SICHERHEITSNETZ -> Timer abbrechen
+  #    Falls GPS "weg" meldet aber ein Geraet noch zuhause ist
+  # ==========================================================================
+  - id: zs_anwesenheit_geraete_sicherheit
+    alias: ZS - Anwesenheit Geraete-Sicherheitsnetz
+    description: >
+      Wenn der Timer laeuft aber ein Device Tracker home meldet
+      ODER ein iPhone sich ins WLAN verbindet:
+      Timer abbrechen (Person ist doch da, GPS war falsch).
+    trigger:
+      - platform: state
+        entity_id:
+          - device_tracker.iphone_15_pro_max_von_oliver
+          - device_tracker.iphone_weini_2
+        to: "home"
+      - platform: state
+        entity_id:
+          - sensor.iphone_15_pro_max_von_oliver_ssid
+          - sensor.iphone_weini_ssid
+    condition:
+      - condition: state
+        entity_id: timer.zs_anwesenheit_abwesend
+        state: "active"
+      - condition: or
+        conditions:
+          - condition: state
+            entity_id: binary_sensor.zs_geraet_zuhause
+            state: "on"
+          - condition: state
+            entity_id: binary_sensor.zs_jemand_im_wlan
+            state: "on"
+    action:
+      - service: timer.cancel
+        target:
+          entity_id: timer.zs_anwesenheit_abwesend
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Sicherheitsnetz ausgeloest"
+          message: >
+            Timer abgebrochen: Geraet noch zuhause erkannt
+            (GPS-Drift vermutet).
+          data:
+            tag: anwesenheit
+    mode: single
+
+  # ==========================================================================
+  # 5) NAHBEREICH BETRETEN -> Heizung vorwaermen
+  # ==========================================================================
+  - id: zs_anwesenheit_nahbereich
+    alias: ZS - Anwesenheit Nahbereich (Vorwaermen)
+    description: >
+      Erste Person betritt Nahbereich-Zone waehrend Abwesenheitsmodus:
+      Heizung Master einschalten zum Vorwaermen.
+    trigger:
+      - platform: state
+        entity_id:
+          - person.oliver_vollmer
+          - person.freweini_tzeggai
+        to: "Nahbereich"
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_anwesenheit_master
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.zs_abwesenheitsmodus
+        state: "on"
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.zs_anwesenheit_testmodus
+                state: "on"
+            sequence:
+              - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+                data:
+                  title: "Testmodus - Nahbereich"
+                  message: >
+                    {{ trigger.to_state.attributes.friendly_name }}
+                    im Nahbereich erkannt.
+                    Im Echtbetrieb wuerde jetzt die Heizung vorwaermen.
+                  data:
+                    tag: anwesenheit
+              - service: notify.mobile_app_iphone_weini
+                data:
+                  title: "Testmodus - Nahbereich"
+                  message: >
+                    {{ trigger.to_state.attributes.friendly_name }}
+                    im Nahbereich erkannt.
+                    Im Echtbetrieb wuerde jetzt die Heizung vorwaermen.
+                  data:
+                    tag: anwesenheit
+
+        default:
+          - service: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.zs_heizung_master
+
+          - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+            data:
+              title: "Heizung waermt vor"
+              message: >
+                {{ trigger.to_state.attributes.friendly_name }}
+                naehert sich - Heizung wird eingeschaltet.
+              data:
+                tag: anwesenheit
+          - service: notify.mobile_app_iphone_weini
+            data:
+              title: "Heizung waermt vor"
+              message: >
+                {{ trigger.to_state.attributes.friendly_name }}
+                naehert sich - Heizung wird eingeschaltet.
+              data:
+                tag: anwesenheit
+    mode: single
+
+  # ==========================================================================
+  # 6) ZUHAUSE ANGEKOMMEN -> Abwesenheitsmodus beenden
+  # ==========================================================================
+  - id: zs_anwesenheit_angekommen
+    alias: ZS - Anwesenheit Angekommen
+    description: >
+      Erste Person kommt nach Hause waehrend Abwesenheitsmodus aktiv:
+      Modus beenden, Heizung sicherstellen.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.zs_jemand_zuhause
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_abwesenheitsmodus
+        state: "on"
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.zs_abwesenheitsmodus
+
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.zs_anwesenheit_testmodus
+                state: "off"
+              - condition: state
+                entity_id: input_boolean.zs_heizung_master
+                state: "off"
+            sequence:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.zs_heizung_master
+        default: []
+
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Willkommen zuhause"
+          message: "Abwesenheitsmodus beendet. Heizung laeuft."
+          data:
+            tag: anwesenheit
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Willkommen zuhause"
+          message: "Abwesenheitsmodus beendet. Heizung laeuft."
+          data:
+            tag: anwesenheit
+
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "anwesenheit"
+    mode: single
+
+  # ==========================================================================
+  # 7) GAESTEMODUS -> Timer abbrechen, Abwesenheitsmodus beenden
+  # ==========================================================================
+  - id: zs_anwesenheit_gaestemodus_ein
+    alias: ZS - Gaestemodus eingeschaltet
+    description: >
+      Gaestemodus wird aktiviert (Kind wird betreut):
+      Laufenden Timer abbrechen, Abwesenheitsmodus beenden,
+      Heizung sicherstellen.
+    trigger:
+      - platform: state
+        entity_id: input_boolean.zs_anwesenheit_gaestemodus
+        from: "off"
+        to: "on"
+    condition: []
+    action:
+      - service: timer.cancel
+        target:
+          entity_id: timer.zs_anwesenheit_abwesend
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.zs_abwesenheitsmodus
+                state: "on"
+            sequence:
+              - service: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.zs_abwesenheitsmodus
+              - choose:
+                  - conditions:
+                      - condition: state
+                        entity_id: input_boolean.zs_heizung_master
+                        state: "off"
+                      - condition: state
+                        entity_id: input_boolean.zs_anwesenheit_testmodus
+                        state: "off"
+                    sequence:
+                      - service: input_boolean.turn_on
+                        target:
+                          entity_id: input_boolean.zs_heizung_master
+                default: []
+        default: []
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Gaestemodus aktiv"
+          message: "Abwesenheitserkennung pausiert - Heizung und Lichter bleiben an."
+          data:
+            tag: anwesenheit
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Gaestemodus aktiv"
+          message: "Abwesenheitserkennung pausiert - Heizung und Lichter bleiben an."
+          data:
+            tag: anwesenheit
+    mode: single
+
+  # ==========================================================================
+  # 7b) GAESTEMODUS AUTO-AUS -> Wenn beide zurueck sind
+  # ==========================================================================
+  - id: zs_anwesenheit_gaestemodus_auto_aus
+    alias: ZS - Gaestemodus auto-deaktivieren
+    description: >
+      Gaestemodus automatisch deaktivieren, wenn beide Personen
+      wieder in der Home-Zone sind. Verhindert, dass der Gaestemodus
+      vergessen wird und die Abwesenheitserkennung dauerhaft pausiert.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.zs_jemand_zuhause
+        to: "on"
+        for:
+          minutes: 2
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_anwesenheit_gaestemodus
+        state: "on"
+      # Beide muessen zuhause sein (nicht nur einer)
+      - condition: state
+        entity_id: person.oliver_vollmer
+        state: "home"
+      - condition: state
+        entity_id: person.freweini_tzeggai
+        state: "home"
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.zs_anwesenheit_gaestemodus
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Gaestemodus beendet"
+          message: "Ihr seid beide wieder da - Gaestemodus automatisch deaktiviert."
+          data:
+            tag: anwesenheit
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Gaestemodus beendet"
+          message: "Ihr seid beide wieder da - Gaestemodus automatisch deaktiviert."
+          data:
+            tag: anwesenheit
+    mode: single
+
+  # ==========================================================================
+  # 8) MASTER AUS -> Alles zuruecksetzen
+  # ==========================================================================
+  - id: zs_anwesenheit_master_aus
+    alias: ZS - Anwesenheit Master AUS
+    description: >
+      Master wird ausgeschaltet: Timer stoppen, Abwesenheitsmodus beenden.
+    trigger:
+      - platform: state
+        entity_id: input_boolean.zs_anwesenheit_master
+        to: "off"
+    condition: []
+    action:
+      - service: timer.cancel
+        target:
+          entity_id: timer.zs_anwesenheit_abwesend
+      - service: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.zs_abwesenheitsmodus
+            - input_boolean.zs_anwesenheit_gaestemodus
+    mode: single
+
+  # ==========================================================================
+  # 9) HA NEUSTART -> Zustand pruefen
+  # ==========================================================================
+  - id: zs_anwesenheit_ha_neustart
+    alias: ZS - Anwesenheit HA Neustart
+    description: >
+      Bei HA Neustart: Wenn Abwesenheitsmodus aktiv und jemand
+      ist inzwischen zuhause: Modus beenden und Heizung einschalten.
+    trigger:
+      - platform: homeassistant
+        event: start
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_abwesenheitsmodus
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.zs_jemand_zuhause
+        state: "on"
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.zs_abwesenheitsmodus
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.zs_heizung_master
+    mode: single

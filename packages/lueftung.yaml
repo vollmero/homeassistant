@@ -1,0 +1,1084 @@
+# ==============================================================================
+# PACKAGE: Stoßlüften-Automation (Alle Räume)
+#
+# FUNKTIONSWEISE:
+# 1. Relative Luftfeuchtigkeit >= Schwellwert (für konfigurierbare Dauer)
+#    UND absolute Feuchtigkeit innen > außen
+#    UND Fenster ZU + Master AN + nicht Ruhezeit
+#    -> Einmalige Benachrichtigung: "Bitte Fenster öffnen"
+# 2. Fenster ÖFFNET (während Feuchtigkeit hoch) -> Bestätigung
+# 3. Feuchtigkeit fällt unter Schwelle (Fenster offen) -> "Fenster schließen"
+# 4. Fenster SCHLIESST (während Feuchtigkeit hoch) -> Bestätigung
+#
+# Notify:
+# - notify.mobile_app_iphone_15_pro_max_von_oliver
+# - notify.mobile_app_iphone_weini
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# HELFER
+# ------------------------------------------------------------------------------
+
+input_boolean:
+  zs_lueftung_master:
+    name: ZS – Lüftungserinnerung Master
+    icon: mdi:window-open-variant
+
+input_number:
+  zs_lueftung_schwelle:
+    name: ZS – Lüftung Schwelle Normalräume (%)
+    min: 40
+    max: 80
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:water-percent
+
+  zs_lueftung_schwelle_bad:
+    name: ZS – Lüftung Schwelle Bad (%)
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:water-percent
+
+  zs_lueftung_dauer:
+    name: ZS – Lüftung Dauer bis Benachrichtigung (Minuten)
+    min: 5
+    max: 120
+    step: 5
+    unit_of_measurement: "min"
+    mode: slider
+    icon: mdi:timer-outline
+
+input_datetime:
+  zs_lueftung_ruhe_von:
+    name: ZS – Lüftung Ruhezeit Von
+    has_date: false
+    has_time: true
+    icon: mdi:sleep
+
+  zs_lueftung_ruhe_bis:
+    name: ZS – Lüftung Ruhezeit Bis
+    has_date: false
+    has_time: true
+    icon: mdi:sleep-off
+
+# ------------------------------------------------------------------------------
+# TEMPLATE-SENSOREN
+# ------------------------------------------------------------------------------
+
+template:
+  - binary_sensor:
+      - name: ZS – Lüftung Ruhezeit
+        unique_id: zs_lueftung_ruhezeit
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:sleep
+          {% else %}
+            mdi:sleep-off
+          {% endif %}
+        state: >
+          {% set von = states('input_datetime.zs_lueftung_ruhe_von')[0:5] %}
+          {% set bis = states('input_datetime.zs_lueftung_ruhe_bis')[0:5] %}
+          {% set jetzt = now().strftime('%H:%M') %}
+          {% if not von or not bis %}
+            {{ false }}
+          {% elif von < bis %}
+            {{ von <= jetzt and jetzt < bis }}
+          {% else %}
+            {{ jetzt >= von or jetzt < bis }}
+          {% endif %}
+
+  - sensor:
+
+      # ── AZ – Arbeitszimmer ──
+      - name: "AZ Lüftungsstatus"
+        unique_id: az_lueftungsstatus
+        state: >
+          {% set abs_i = states('sensor.az_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set abs_a = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set rel = states('sensor.az_raumklima_01_luftfeuchtigkeit') | float(0) %}
+          {% set sw = states('input_number.zs_lueftung_schwelle') | float(60) %}
+          {% set pct = ((rel / sw) * 100) | round(0) %}
+          {% set fenster = is_state('binary_sensor.az_fenster_01_offnung', 'on') %}
+          {% if fenster %}Lüften
+          {% elif pct >= 100 and abs_i > abs_a %}Lüften!
+          {% elif pct >= 100 and abs_i <= abs_a %}Sinnlos
+          {% elif pct >= 85 %}Erhöht
+          {% else %}OK
+          {% endif %}
+
+      # ── BZ – Badezimmer (Schwelle Bad) ──
+      - name: "BZ Lüftungsstatus"
+        unique_id: bz_lueftungsstatus
+        state: >
+          {% set abs_i = states('sensor.bz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set abs_a = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set rel = states('sensor.bz_raumklima_01_luftfeuchtigkeit') | float(0) %}
+          {% set sw = states('input_number.zs_lueftung_schwelle_bad') | float(70) %}
+          {% set pct = ((rel / sw) * 100) | round(0) %}
+          {% set fenster = is_state('binary_sensor.bz_fenster_01', 'on') %}
+          {% if fenster %}Lüften
+          {% elif pct >= 100 and abs_i > abs_a %}Lüften!
+          {% elif pct >= 100 and abs_i <= abs_a %}Sinnlos
+          {% elif pct >= 85 %}Erhöht
+          {% else %}OK
+          {% endif %}
+
+      # ── WZ – Wohnzimmer ──
+      - name: "WZ Lüftungsstatus"
+        unique_id: wz_lueftungsstatus
+        state: >
+          {% set abs_i = states('sensor.wz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set abs_a = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set rel = states('sensor.wz_raumklima_01_luftfeuchtigkeit') | float(0) %}
+          {% set sw = states('input_number.zs_lueftung_schwelle') | float(60) %}
+          {% set pct = ((rel / sw) * 100) | round(0) %}
+          {% set fenster = is_state('binary_sensor.wz_fenstergruppe_01', 'on') %}
+          {% if fenster %}Lüften
+          {% elif pct >= 100 and abs_i > abs_a %}Lüften!
+          {% elif pct >= 100 and abs_i <= abs_a %}Sinnlos
+          {% elif pct >= 85 %}Erhöht
+          {% else %}OK
+          {% endif %}
+
+      # ── KU – Küche ──
+      - name: "KU Lüftungsstatus"
+        unique_id: ku_lueftungsstatus
+        state: >
+          {% set abs_i = states('sensor.ku_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set abs_a = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set rel = states('sensor.ku_raumklima_01_luftfeuchtigkeit') | float(0) %}
+          {% set sw = states('input_number.zs_lueftung_schwelle') | float(60) %}
+          {% set pct = ((rel / sw) * 100) | round(0) %}
+          {% set fenster = is_state('binary_sensor.ku_fenstergruppe_01', 'on') %}
+          {% if fenster %}Lüften
+          {% elif pct >= 100 and abs_i > abs_a %}Lüften!
+          {% elif pct >= 100 and abs_i <= abs_a %}Sinnlos
+          {% elif pct >= 85 %}Erhöht
+          {% else %}OK
+          {% endif %}
+
+      # ── KI – Kinderzimmer ──
+      - name: "KI Lüftungsstatus"
+        unique_id: ki_lueftungsstatus
+        state: >
+          {% set abs_i = states('sensor.ki_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set abs_a = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set rel = states('sensor.ki_raumklima_01_luftfeuchtigkeit') | float(0) %}
+          {% set sw = states('input_number.zs_lueftung_schwelle') | float(60) %}
+          {% set pct = ((rel / sw) * 100) | round(0) %}
+          {% set fenster = is_state('binary_sensor.ki_fenstergruppe_01', 'on') %}
+          {% if fenster %}Lüften
+          {% elif pct >= 100 and abs_i > abs_a %}Lüften!
+          {% elif pct >= 100 and abs_i <= abs_a %}Sinnlos
+          {% elif pct >= 85 %}Erhöht
+          {% else %}OK
+          {% endif %}
+
+      # ── SZ – Schlafzimmer ──
+      - name: "SZ Lüftungsstatus"
+        unique_id: sz_lueftungsstatus
+        state: >
+          {% set abs_i = states('sensor.sz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set abs_a = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set rel = states('sensor.sz_raumklima_01_luftfeuchtigkeit') | float(0) %}
+          {% set sw = states('input_number.zs_lueftung_schwelle') | float(60) %}
+          {% set pct = ((rel / sw) * 100) | round(0) %}
+          {% set fenster = is_state('binary_sensor.sz_fenster_01', 'on') %}
+          {% if fenster %}Lüften
+          {% elif pct >= 100 and abs_i > abs_a %}Lüften!
+          {% elif pct >= 100 and abs_i <= abs_a %}Sinnlos
+          {% elif pct >= 85 %}Erhöht
+          {% else %}OK
+          {% endif %}
+
+# ------------------------------------------------------------------------------
+# AUTOMATIONEN
+# ------------------------------------------------------------------------------
+
+automation:
+
+  # ==========================================================================
+  # AZ – ARBEITSZIMMER
+  # ==========================================================================
+
+  - id: az_lueftung_erinnerung
+    alias: AZ – Stoßlüften Erinnerung
+    description: >
+      Einmalige Benachrichtigung wenn Luftfeuchtigkeit für konfigurierbare
+      Dauer über Schwelle liegt und Lüften sinnvoll ist.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.az_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+        for:
+          minutes: "{{ states('input_number.zs_lueftung_dauer') | int(60) }}"
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_lueftung_master
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.zs_lueftung_ruhezeit
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.az_fenster_01_offnung
+        state: "off"
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.az_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - variables:
+          feuchte_rel: "{{ states('sensor.az_raumklima_01_luftfeuchtigkeit') | round(0) }}"
+          schwelle: "{{ states('input_number.zs_lueftung_schwelle') | round(0) }}"
+      - service: persistent_notification.create
+        data:
+          title: "Stoßlüften – Arbeitszimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          notification_id: "lueftung_az"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Stoßlüften – Arbeitszimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_az
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Stoßlüften – Arbeitszimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_az
+    mode: single
+
+  - id: az_lueftung_fenster_offen
+    alias: AZ – Fenster geöffnet (Lüftung)
+    description: Bestätigung wenn Fenster geöffnet wird während Feuchtigkeit zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.az_fenster_01_offnung
+        to: "on"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.az_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.az_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_az"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geöffnet – Arbeitszimmer"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.az_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_az
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geöffnet – Arbeitszimmer"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.az_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_az
+    mode: single
+
+  - id: az_lueftung_ok
+    alias: AZ – Feuchtigkeit OK
+    description: Feuchtigkeit unter Schwelle gefallen, Fenster kann geschlossen werden.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.az_raumklima_01_luftfeuchtigkeit
+        below: input_number.zs_lueftung_schwelle
+    condition:
+      - condition: state
+        entity_id: binary_sensor.az_fenster_01_offnung
+        state: "on"
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_az"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Feuchtigkeit OK – Arbeitszimmer"
+          message: "Feuchtigkeit jetzt {{ states('sensor.az_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_az
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Feuchtigkeit OK – Arbeitszimmer"
+          message: "Feuchtigkeit jetzt {{ states('sensor.az_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_az
+    mode: single
+
+  - id: az_lueftung_fenster_zu
+    alias: AZ – Fenster geschlossen (Lüftung)
+    description: Bestätigung wenn Fenster geschlossen wird während Feuchtigkeit noch zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.az_fenster_01_offnung
+        to: "off"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.az_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.az_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geschlossen – Arbeitszimmer"
+          message: "Feuchtigkeit noch {{ states('sensor.az_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle') | round(0) }}%)."
+          data:
+            tag: lueftung_az
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geschlossen – Arbeitszimmer"
+          message: "Feuchtigkeit noch {{ states('sensor.az_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle') | round(0) }}%)."
+          data:
+            tag: lueftung_az
+    mode: single
+
+  # ==========================================================================
+  # BZ – BADEZIMMER (Schwelle Bad)
+  # ==========================================================================
+
+  - id: bz_lueftung_erinnerung
+    alias: BZ – Stoßlüften Erinnerung
+    description: >
+      Einmalige Benachrichtigung wenn Luftfeuchtigkeit für konfigurierbare
+      Dauer über Schwelle liegt und Lüften sinnvoll ist.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.bz_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle_bad
+        for:
+          minutes: "{{ states('input_number.zs_lueftung_dauer') | int(60) }}"
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_lueftung_master
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.zs_lueftung_ruhezeit
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.bz_fenster_01
+        state: "off"
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.bz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - variables:
+          feuchte_rel: "{{ states('sensor.bz_raumklima_01_luftfeuchtigkeit') | round(0) }}"
+          schwelle: "{{ states('input_number.zs_lueftung_schwelle_bad') | round(0) }}"
+      - service: persistent_notification.create
+        data:
+          title: "Stoßlüften – Badezimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          notification_id: "lueftung_bz"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Stoßlüften – Badezimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_bz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Stoßlüften – Badezimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_bz
+    mode: single
+
+  - id: bz_lueftung_fenster_offen
+    alias: BZ – Fenster geöffnet (Lüftung)
+    description: Bestätigung wenn Fenster geöffnet wird während Feuchtigkeit zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.bz_fenster_01
+        to: "on"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.bz_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle_bad
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.bz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_bz"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geöffnet – Badezimmer"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.bz_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_bz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geöffnet – Badezimmer"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.bz_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_bz
+    mode: single
+
+  - id: bz_lueftung_ok
+    alias: BZ – Feuchtigkeit OK
+    description: Feuchtigkeit unter Schwelle gefallen, Fenster kann geschlossen werden.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.bz_raumklima_01_luftfeuchtigkeit
+        below: input_number.zs_lueftung_schwelle_bad
+    condition:
+      - condition: state
+        entity_id: binary_sensor.bz_fenster_01
+        state: "on"
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_bz"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Feuchtigkeit OK – Badezimmer"
+          message: "Feuchtigkeit jetzt {{ states('sensor.bz_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_bz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Feuchtigkeit OK – Badezimmer"
+          message: "Feuchtigkeit jetzt {{ states('sensor.bz_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_bz
+    mode: single
+
+  - id: bz_lueftung_fenster_zu
+    alias: BZ – Fenster geschlossen (Lüftung)
+    description: Bestätigung wenn Fenster geschlossen wird während Feuchtigkeit noch zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.bz_fenster_01
+        to: "off"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.bz_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle_bad
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.bz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geschlossen – Badezimmer"
+          message: "Feuchtigkeit noch {{ states('sensor.bz_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle_bad') | round(0) }}%)."
+          data:
+            tag: lueftung_bz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geschlossen – Badezimmer"
+          message: "Feuchtigkeit noch {{ states('sensor.bz_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle_bad') | round(0) }}%)."
+          data:
+            tag: lueftung_bz
+    mode: single
+
+  # ==========================================================================
+  # WZ – WOHNZIMMER
+  # ==========================================================================
+
+  - id: wz_lueftung_erinnerung
+    alias: WZ – Stoßlüften Erinnerung
+    description: >
+      Einmalige Benachrichtigung wenn Luftfeuchtigkeit für konfigurierbare
+      Dauer über Schwelle liegt und Lüften sinnvoll ist.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.wz_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+        for:
+          minutes: "{{ states('input_number.zs_lueftung_dauer') | int(60) }}"
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_lueftung_master
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.zs_lueftung_ruhezeit
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.wz_fenstergruppe_01
+        state: "off"
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.wz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - variables:
+          feuchte_rel: "{{ states('sensor.wz_raumklima_01_luftfeuchtigkeit') | round(0) }}"
+          schwelle: "{{ states('input_number.zs_lueftung_schwelle') | round(0) }}"
+      - service: persistent_notification.create
+        data:
+          title: "Stoßlüften – Wohnzimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          notification_id: "lueftung_wz"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Stoßlüften – Wohnzimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_wz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Stoßlüften – Wohnzimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_wz
+    mode: single
+
+  - id: wz_lueftung_fenster_offen
+    alias: WZ – Fenster geöffnet (Lüftung)
+    description: Bestätigung wenn Fenster geöffnet wird während Feuchtigkeit zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.wz_fenstergruppe_01
+        to: "on"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.wz_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.wz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_wz"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geöffnet – Wohnzimmer"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.wz_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_wz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geöffnet – Wohnzimmer"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.wz_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_wz
+    mode: single
+
+  - id: wz_lueftung_ok
+    alias: WZ – Feuchtigkeit OK
+    description: Feuchtigkeit unter Schwelle gefallen, Fenster kann geschlossen werden.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.wz_raumklima_01_luftfeuchtigkeit
+        below: input_number.zs_lueftung_schwelle
+    condition:
+      - condition: state
+        entity_id: binary_sensor.wz_fenstergruppe_01
+        state: "on"
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_wz"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Feuchtigkeit OK – Wohnzimmer"
+          message: "Feuchtigkeit jetzt {{ states('sensor.wz_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_wz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Feuchtigkeit OK – Wohnzimmer"
+          message: "Feuchtigkeit jetzt {{ states('sensor.wz_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_wz
+    mode: single
+
+  - id: wz_lueftung_fenster_zu
+    alias: WZ – Fenster geschlossen (Lüftung)
+    description: Bestätigung wenn Fenster geschlossen wird während Feuchtigkeit noch zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.wz_fenstergruppe_01
+        to: "off"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.wz_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.wz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geschlossen – Wohnzimmer"
+          message: "Feuchtigkeit noch {{ states('sensor.wz_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle') | round(0) }}%)."
+          data:
+            tag: lueftung_wz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geschlossen – Wohnzimmer"
+          message: "Feuchtigkeit noch {{ states('sensor.wz_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle') | round(0) }}%)."
+          data:
+            tag: lueftung_wz
+    mode: single
+
+  # ==========================================================================
+  # KU – KÜCHE
+  # ==========================================================================
+
+  - id: ku_lueftung_erinnerung
+    alias: KU – Stoßlüften Erinnerung
+    description: >
+      Einmalige Benachrichtigung wenn Luftfeuchtigkeit für konfigurierbare
+      Dauer über Schwelle liegt und Lüften sinnvoll ist.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.ku_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+        for:
+          minutes: "{{ states('input_number.zs_lueftung_dauer') | int(60) }}"
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_lueftung_master
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.zs_lueftung_ruhezeit
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.ku_fenstergruppe_01
+        state: "off"
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.ku_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - variables:
+          feuchte_rel: "{{ states('sensor.ku_raumklima_01_luftfeuchtigkeit') | round(0) }}"
+          schwelle: "{{ states('input_number.zs_lueftung_schwelle') | round(0) }}"
+      - service: persistent_notification.create
+        data:
+          title: "Stoßlüften – Küche"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          notification_id: "lueftung_ku"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Stoßlüften – Küche"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_ku
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Stoßlüften – Küche"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_ku
+    mode: single
+
+  - id: ku_lueftung_fenster_offen
+    alias: KU – Fenster geöffnet (Lüftung)
+    description: Bestätigung wenn Fenster geöffnet wird während Feuchtigkeit zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.ku_fenstergruppe_01
+        to: "on"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.ku_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.ku_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_ku"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geöffnet – Küche"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.ku_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_ku
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geöffnet – Küche"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.ku_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_ku
+    mode: single
+
+  - id: ku_lueftung_ok
+    alias: KU – Feuchtigkeit OK
+    description: Feuchtigkeit unter Schwelle gefallen, Fenster kann geschlossen werden.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.ku_raumklima_01_luftfeuchtigkeit
+        below: input_number.zs_lueftung_schwelle
+    condition:
+      - condition: state
+        entity_id: binary_sensor.ku_fenstergruppe_01
+        state: "on"
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_ku"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Feuchtigkeit OK – Küche"
+          message: "Feuchtigkeit jetzt {{ states('sensor.ku_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_ku
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Feuchtigkeit OK – Küche"
+          message: "Feuchtigkeit jetzt {{ states('sensor.ku_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_ku
+    mode: single
+
+  - id: ku_lueftung_fenster_zu
+    alias: KU – Fenster geschlossen (Lüftung)
+    description: Bestätigung wenn Fenster geschlossen wird während Feuchtigkeit noch zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.ku_fenstergruppe_01
+        to: "off"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.ku_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.ku_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geschlossen – Küche"
+          message: "Feuchtigkeit noch {{ states('sensor.ku_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle') | round(0) }}%)."
+          data:
+            tag: lueftung_ku
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geschlossen – Küche"
+          message: "Feuchtigkeit noch {{ states('sensor.ku_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle') | round(0) }}%)."
+          data:
+            tag: lueftung_ku
+    mode: single
+
+  # ==========================================================================
+  # KI – KINDERZIMMER
+  # ==========================================================================
+
+  - id: ki_lueftung_erinnerung
+    alias: KI – Stoßlüften Erinnerung
+    description: >
+      Einmalige Benachrichtigung wenn Luftfeuchtigkeit für konfigurierbare
+      Dauer über Schwelle liegt und Lüften sinnvoll ist.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.ki_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+        for:
+          minutes: "{{ states('input_number.zs_lueftung_dauer') | int(60) }}"
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_lueftung_master
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.zs_lueftung_ruhezeit
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.ki_fenstergruppe_01
+        state: "off"
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.ki_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - variables:
+          feuchte_rel: "{{ states('sensor.ki_raumklima_01_luftfeuchtigkeit') | round(0) }}"
+          schwelle: "{{ states('input_number.zs_lueftung_schwelle') | round(0) }}"
+      - service: persistent_notification.create
+        data:
+          title: "Stoßlüften – Kinderzimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          notification_id: "lueftung_ki"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Stoßlüften – Kinderzimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_ki
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Stoßlüften – Kinderzimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_ki
+    mode: single
+
+  - id: ki_lueftung_fenster_offen
+    alias: KI – Fenster geöffnet (Lüftung)
+    description: Bestätigung wenn Fenster geöffnet wird während Feuchtigkeit zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.ki_fenstergruppe_01
+        to: "on"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.ki_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.ki_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_ki"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geöffnet – Kinderzimmer"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.ki_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_ki
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geöffnet – Kinderzimmer"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.ki_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_ki
+    mode: single
+
+  - id: ki_lueftung_ok
+    alias: KI – Feuchtigkeit OK
+    description: Feuchtigkeit unter Schwelle gefallen, Fenster kann geschlossen werden.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.ki_raumklima_01_luftfeuchtigkeit
+        below: input_number.zs_lueftung_schwelle
+    condition:
+      - condition: state
+        entity_id: binary_sensor.ki_fenstergruppe_01
+        state: "on"
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_ki"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Feuchtigkeit OK – Kinderzimmer"
+          message: "Feuchtigkeit jetzt {{ states('sensor.ki_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_ki
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Feuchtigkeit OK – Kinderzimmer"
+          message: "Feuchtigkeit jetzt {{ states('sensor.ki_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_ki
+    mode: single
+
+  - id: ki_lueftung_fenster_zu
+    alias: KI – Fenster geschlossen (Lüftung)
+    description: Bestätigung wenn Fenster geschlossen wird während Feuchtigkeit noch zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.ki_fenstergruppe_01
+        to: "off"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.ki_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.ki_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geschlossen – Kinderzimmer"
+          message: "Feuchtigkeit noch {{ states('sensor.ki_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle') | round(0) }}%)."
+          data:
+            tag: lueftung_ki
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geschlossen – Kinderzimmer"
+          message: "Feuchtigkeit noch {{ states('sensor.ki_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle') | round(0) }}%)."
+          data:
+            tag: lueftung_ki
+    mode: single
+
+  # ==========================================================================
+  # SZ – SCHLAFZIMMER
+  # ==========================================================================
+
+  - id: sz_lueftung_erinnerung
+    alias: SZ – Stoßlüften Erinnerung
+    description: >
+      Einmalige Benachrichtigung wenn Luftfeuchtigkeit für konfigurierbare
+      Dauer über Schwelle liegt und Lüften sinnvoll ist.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.sz_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+        for:
+          minutes: "{{ states('input_number.zs_lueftung_dauer') | int(60) }}"
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_lueftung_master
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.zs_lueftung_ruhezeit
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.sz_fenster_01
+        state: "off"
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.sz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - variables:
+          feuchte_rel: "{{ states('sensor.sz_raumklima_01_luftfeuchtigkeit') | round(0) }}"
+          schwelle: "{{ states('input_number.zs_lueftung_schwelle') | round(0) }}"
+      - service: persistent_notification.create
+        data:
+          title: "Stoßlüften – Schlafzimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          notification_id: "lueftung_sz"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Stoßlüften – Schlafzimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_sz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Stoßlüften – Schlafzimmer"
+          message: "Luftfeuchtigkeit {{ feuchte_rel }}% (Schwelle: {{ schwelle }}%). Bitte Fenster öffnen."
+          data:
+            tag: lueftung_sz
+    mode: single
+
+  - id: sz_lueftung_fenster_offen
+    alias: SZ – Fenster geöffnet (Lüftung)
+    description: Bestätigung wenn Fenster geöffnet wird während Feuchtigkeit zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.sz_fenster_01
+        to: "on"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.sz_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.sz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_sz"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geöffnet – Schlafzimmer"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.sz_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_sz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geöffnet – Schlafzimmer"
+          message: "Lüftung läuft. Feuchtigkeit: {{ states('sensor.sz_raumklima_01_luftfeuchtigkeit') | round(0) }}%."
+          data:
+            tag: lueftung_sz
+    mode: single
+
+  - id: sz_lueftung_ok
+    alias: SZ – Feuchtigkeit OK
+    description: Feuchtigkeit unter Schwelle gefallen, Fenster kann geschlossen werden.
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.sz_raumklima_01_luftfeuchtigkeit
+        below: input_number.zs_lueftung_schwelle
+    condition:
+      - condition: state
+        entity_id: binary_sensor.sz_fenster_01
+        state: "on"
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: "lueftung_sz"
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Feuchtigkeit OK – Schlafzimmer"
+          message: "Feuchtigkeit jetzt {{ states('sensor.sz_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_sz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Feuchtigkeit OK – Schlafzimmer"
+          message: "Feuchtigkeit jetzt {{ states('sensor.sz_raumklima_01_luftfeuchtigkeit') | round(0) }}%. Fenster schließen."
+          data:
+            tag: lueftung_sz
+    mode: single
+
+  - id: sz_lueftung_fenster_zu
+    alias: SZ – Fenster geschlossen (Lüftung)
+    description: Bestätigung wenn Fenster geschlossen wird während Feuchtigkeit noch zu hoch.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.sz_fenster_01
+        to: "off"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.sz_raumklima_01_luftfeuchtigkeit
+        above: input_number.zs_lueftung_schwelle
+      - condition: template
+        value_template: >
+          {% set innen = states('sensor.sz_raumklima_absolute_luftfeuchtigkeit') | float(0) %}
+          {% set aussen = states('sensor.stuttgart_neckartal_absolute_luftfeuchtigkeit') | float(0) %}
+          {{ innen > aussen }}
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Fenster geschlossen – Schlafzimmer"
+          message: "Feuchtigkeit noch {{ states('sensor.sz_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle') | round(0) }}%)."
+          data:
+            tag: lueftung_sz
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Fenster geschlossen – Schlafzimmer"
+          message: "Feuchtigkeit noch {{ states('sensor.sz_raumklima_01_luftfeuchtigkeit') | round(0) }}% (Schwelle: {{ states('input_number.zs_lueftung_schwelle') | round(0) }}%)."
+          data:
+            tag: lueftung_sz
+    mode: single

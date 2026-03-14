@@ -1,0 +1,213 @@
+# ==============================================================================
+# PACKAGE: Heizungssteuerung Kueche (KU) - V4.0
+#
+# AENDERUNGEN V4.0:
+# - TRV-Offset-Steuerung: Automation berechnet korrigierte Zieltemperatur
+#   basierend auf Differenz zwischen TRV-Sensor und Raumklima-Sensor
+# - TRV regelt selbst (PID) -> sanftere Temperaturkurve
+# - Hysterese entfaellt (TRV uebernimmt)
+# - Harte Abschaltung nur bei: Sensor offline, Fenster, Automatik aus,
+#   Master aus (Abwesenheit), Nachtmodus, Aussentemp zu hoch
+# - Zeitplanbasierte Zieltemperatur (schedule.ku_heizung_zeitplan)
+#
+# Externe Abhaengigkeiten (aus heating_global.yaml):
+# - input_boolean.zs_heizung_master
+# - binary_sensor.zs_heizung_nachtzeit
+# - input_number.zs_heizung_aussen_aus
+# - weather.stuttgart_neckartal
+#
+# Raum-Entitaeten:
+# - binary_sensor.ku_fenstergruppe_01 (Fensterkontakt)
+# - sensor.ku_raumklima_01_temperatur (Raumtemperatur)
+# - climate.ku_heizung_01 (Thermostat/TRV)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# HELFER
+# ------------------------------------------------------------------------------
+
+input_boolean:
+  ku_heizung_automatik:
+    name: KU - Heizautomatik
+    icon: mdi:radiator
+
+  ku_heizung_zeitplan_aktiv:
+    name: KU - Heizung Zeitplan aktiv
+    icon: mdi:calendar-clock
+
+input_number:
+  ku_heizung_zieltemperatur:
+    name: KU - Zieltemperatur
+    min: 16
+    max: 26
+    step: 0.5
+    unit_of_measurement: "°C"
+    mode: slider
+    icon: mdi:thermometer
+
+  ku_heizung_absenktemp:
+    name: KU - Absenktemperatur
+    min: 14
+    max: 20
+    step: 0.5
+    unit_of_measurement: "°C"
+    mode: slider
+    icon: mdi:thermometer-low
+
+# ------------------------------------------------------------------------------
+# AUTOMATIONEN
+# ------------------------------------------------------------------------------
+
+automation:
+  # ============================================================================
+  # HAUPTAUTOMATION: Heizlogik KU - TRV-Offset-Steuerung
+  # ============================================================================
+  - id: ku_heizlogik_v4
+    alias: KU - Heizlogik V4.0
+    description: >
+      TRV-Offset-Steuerung: Berechnet korrigierte Zieltemperatur aus
+      Differenz zwischen TRV-Sensor und externem Raumklima-Sensor.
+      Harte Abschaltung nur bei Fenster/Abwesenheit/Nacht.
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.ku_raumklima_01_temperatur
+          - binary_sensor.ku_fenstergruppe_01
+          - input_boolean.zs_heizung_master
+          - binary_sensor.zs_heizung_nachtzeit
+          - input_boolean.ku_heizung_automatik
+          - input_number.ku_heizung_zieltemperatur
+          - input_number.zs_heizung_aussen_aus
+          - schedule.ku_heizung_zeitplan
+          - input_boolean.ku_heizung_zeitplan_aktiv
+          - input_number.ku_heizung_absenktemp
+
+      - platform: state
+        entity_id: weather.stuttgart_neckartal
+        attribute: temperature
+      
+      # TRV-Temperatur-Aenderung als Trigger (fuer Offset-Neuberechnung)
+      - platform: state
+        entity_id: climate.ku_heizung_01
+        attribute: current_temperature
+    
+    variables:
+      temp_sensor: "sensor.ku_raumklima_01_temperatur"
+      temp_sensor_verfuegbar: "{{ not is_state(temp_sensor, 'unavailable') }}"
+      
+      fenster: "binary_sensor.ku_fenstergruppe_01"
+      fenster_offen: "{{ is_state(fenster, 'on') }}"
+      
+      raum_automatik: "{{ is_state('input_boolean.ku_heizung_automatik', 'on') }}"
+      master_on: "{{ is_state('input_boolean.zs_heizung_master', 'on') }}"
+      nacht_on: "{{ is_state('binary_sensor.zs_heizung_nachtzeit', 'on') }}"
+      
+      aussentemp: >
+        {% set w = state_attr('weather.stuttgart_neckartal', 'temperature') %}
+        {{ w if w != None else 0 }}
+      
+      raumtemp: >
+        {% set t = states(temp_sensor) | float(-999) %}
+        {{ t if t != -999 else 0 }}
+      
+      zieltemp: >
+        {% if is_state('input_boolean.ku_heizung_zeitplan_aktiv', 'on')
+           and is_state('schedule.ku_heizung_zeitplan', 'off') %}
+          {{ states('input_number.ku_heizung_absenktemp') | float(17) }}
+        {% else %}
+          {{ states('input_number.ku_heizung_zieltemperatur') | float(21) }}
+        {% endif %}
+      
+      # TRV-Offset-Berechnung
+      trv_temp: >
+        {% set t = state_attr('climate.ku_heizung_01', 'current_temperature') %}
+        {{ t if t != None else raumtemp }}
+      
+      offset: >
+        {% set raw = (trv_temp | float - raumtemp | float) | round(1) %}
+        {{ [[-5, raw] | max, 10] | min }}
+      
+      korrigierte_zieltemp: >
+        {{ (zieltemp | float + offset | float) | round(1) }}
+      
+      schwelle_aus: "{{ states('input_number.zs_heizung_aussen_aus') | float(15) }}"
+    
+    action:
+      - choose:
+          # PRIORITAET 1: Temperatursensor nicht verfuegbar -> AUS
+          - conditions:
+              - condition: template
+                value_template: "{{ not temp_sensor_verfuegbar }}"
+            sequence:
+              - service: climate.turn_off
+                target:
+                  entity_id: climate.ku_heizung_01
+          
+          # PRIORITAET 2: Fenster offen -> AUS
+          - conditions:
+              - condition: template
+                value_template: "{{ fenster_offen }}"
+            sequence:
+              - service: climate.turn_off
+                target:
+                  entity_id: climate.ku_heizung_01
+          
+          # PRIORITAET 3: Raum-Automatik AUS -> AUS
+          - conditions:
+              - condition: template
+                value_template: "{{ not raum_automatik }}"
+            sequence:
+              - service: climate.turn_off
+                target:
+                  entity_id: climate.ku_heizung_01
+          
+          # PRIORITAET 4: Master AUS -> AUS
+          - conditions:
+              - condition: template
+                value_template: "{{ not master_on }}"
+            sequence:
+              - service: climate.turn_off
+                target:
+                  entity_id: climate.ku_heizung_01
+          
+          # PRIORITAET 5: Nachtzeit -> nichts tun
+          - conditions:
+              - condition: template
+                value_template: "{{ nacht_on }}"
+            sequence: []
+          
+          # PRIORITAET 6: Aussentemperatur zu hoch -> AUS
+          - conditions:
+              - condition: template
+                value_template: "{{ aussentemp >= schwelle_aus }}"
+            sequence:
+              - service: climate.turn_off
+                target:
+                  entity_id: climate.ku_heizung_01
+        
+        # STANDARD: TRV-Offset-Steuerung
+        default:
+          - choose:
+              # Raumtemperatur erreicht -> TRV aus (Batterie schonen)
+              - conditions:
+                  - condition: template
+                    value_template: "{{ raumtemp | float >= zieltemp | float }}"
+                sequence:
+                  - service: climate.turn_off
+                    target:
+                      entity_id: climate.ku_heizung_01
+            
+            # Heizen noetig -> TRV mit korrigierter Zieltemp
+            default:
+              - service: climate.set_hvac_mode
+                target:
+                  entity_id: climate.ku_heizung_01
+                data:
+                  hvac_mode: heat
+              
+              - service: climate.set_temperature
+                target:
+                  entity_id: climate.ku_heizung_01
+                data:
+                  temperature: "{{ korrigierte_zieltemp }}"

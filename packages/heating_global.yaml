@@ -1,0 +1,276 @@
+# ==============================================================================
+# PACKAGE: Globale Heizungssteuerung (ZS)
+#
+# Enthält:
+# - Globaler Master-Schalter
+# - Nachtschaltung (Zeitfenster)
+# - Frühe Nachtschaltung (KI + SZ)
+# - Außentemperatur-Schwelle (AUS)
+# - Template-Sensoren: Nachtzeit aktiv, Frühe Nachtzeit aktiv
+# - Automationen: Master AN/AUS, Nachtstart/Ende, HA-Neustart
+#
+# Externe Abhängigkeiten:
+# - weather.stuttgart_neckartal (Außentemperatur)
+#
+# Raum-Entitäten (werden von globalen Automationen angesteuert):
+# - input_boolean.az_heizung_automatik / climate.az_heizung_01
+# - input_boolean.bz_heizung_automatik / climate.bz_heizung_01
+# - input_boolean.wz_heizung_automatik / climate.wz_heizungsgruppe_01
+# - input_boolean.ku_heizung_automatik / climate.ku_heizung_01
+# - input_boolean.ki_heizung_automatik / climate.ki_heizungsgruppe_01
+# - input_boolean.sz_heizung_automatik / climate.sz_heizung_01
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# HELFER
+# ------------------------------------------------------------------------------
+
+input_boolean:
+  zs_heizung_master:
+    name: ZS – Heizung Master
+    icon: mdi:radiator
+
+  zs_heizung_fruehe_nacht_aktiv:
+    name: ZS – Frühe Nachtschaltung (KI+SZ)
+    icon: mdi:moon-first-quarter
+
+input_datetime:
+  zs_heizung_nacht_von:
+    name: ZS – Nachtschaltung Von
+    has_date: false
+    has_time: true
+    icon: mdi:weather-night
+
+  zs_heizung_nacht_bis:
+    name: ZS – Nachtschaltung Bis
+    has_date: false
+    has_time: true
+    icon: mdi:weather-sunset-up
+
+  zs_heizung_fruehe_nacht_von:
+    name: ZS – Frühe Nacht Von (KI+SZ)
+    has_date: false
+    has_time: true
+    icon: mdi:moon-first-quarter
+
+  zs_heizung_fruehe_nacht_bis:
+    name: ZS – Frühe Nacht Bis (KI+SZ)
+    has_date: false
+    has_time: true
+    icon: mdi:moon-last-quarter
+
+input_number:
+  zs_heizung_aussen_aus:
+    name: ZS – Außentemp Heizung AUS
+    min: 10
+    max: 20
+    step: 0.5
+    unit_of_measurement: "°C"
+    mode: slider
+    icon: mdi:thermometer-high
+
+# ------------------------------------------------------------------------------
+# TEMPLATE-SENSOREN
+# ------------------------------------------------------------------------------
+
+template:
+  - binary_sensor:
+      - name: ZS – Heizung Nachtzeit
+        unique_id: zs_heizung_nachtzeit
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:weather-night
+          {% else %}
+            mdi:weather-sunset-up
+          {% endif %}
+        state: >
+          {% set von = states('input_datetime.zs_heizung_nacht_von')[0:5] %}
+          {% set bis = states('input_datetime.zs_heizung_nacht_bis')[0:5] %}
+          {% set jetzt = now().strftime('%H:%M') %}
+          {% if not von or not bis %}
+            {{ false }}
+          {% elif von < bis %}
+            {{ von <= jetzt and jetzt < bis }}
+          {% else %}
+            {{ jetzt >= von or jetzt < bis }}
+          {% endif %}
+
+      - name: ZS – Heizung Frühe Nachtzeit
+        unique_id: zs_heizung_fruehe_nacht_zeitfenster
+        icon: >
+          {% if this.state == 'on' %}
+            mdi:moon-first-quarter
+          {% else %}
+            mdi:moon-last-quarter
+          {% endif %}
+        state: >
+          {% set aktiv = is_state('input_boolean.zs_heizung_fruehe_nacht_aktiv', 'on') %}
+          {% set von = states('input_datetime.zs_heizung_fruehe_nacht_von')[0:5] %}
+          {% set bis = states('input_datetime.zs_heizung_fruehe_nacht_bis')[0:5] %}
+          {% set jetzt = now().strftime('%H:%M') %}
+          {% if not aktiv or not von or not bis %}
+            {{ false }}
+          {% elif von < bis %}
+            {{ von <= jetzt and jetzt < bis }}
+          {% else %}
+            {{ jetzt >= von or jetzt < bis }}
+          {% endif %}
+
+# ------------------------------------------------------------------------------
+# AUTOMATIONEN
+# ------------------------------------------------------------------------------
+
+automation:
+  # ==========================================================================
+  # 1) MASTER AUS → Alle Thermostate AUS, alle Raum-Automatiken AUS
+  # ==========================================================================
+  - id: zs_heizung_master_aus
+    alias: ZS – Heizung Master AUS
+    description: >
+      Master wird ausgeschaltet: Alle Thermostate aus, alle Raum-Automatiken aus.
+    trigger:
+      - platform: state
+        entity_id: input_boolean.zs_heizung_master
+        from: "on"
+        to: "off"
+    condition: []
+    action:
+      - service: climate.turn_off
+        target:
+          entity_id:
+            - climate.az_heizung_01
+            - climate.bz_heizung_01
+            - climate.wz_heizungsgruppe_01
+            - climate.ku_heizung_01
+            - climate.ki_heizungsgruppe_01
+            - climate.sz_heizung_01
+      - service: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.az_heizung_automatik
+            - input_boolean.bz_heizung_automatik
+            - input_boolean.wz_heizung_automatik
+            - input_boolean.ku_heizung_automatik
+            - input_boolean.ki_heizung_automatik
+            - input_boolean.sz_heizung_automatik
+    mode: single
+
+  # ==========================================================================
+  # 2) MASTER EIN → Raum-Automatiken EIN
+  #    (Die Raum-Automationen werten dann selbst die Bedingungen aus)
+  # ==========================================================================
+  - id: zs_heizung_master_ein
+    alias: ZS – Heizung Master EIN
+    description: >
+      Master wird eingeschaltet: Alle Raum-Automatiken einschalten.
+      Die Raum-Automationen prüfen dann selbst Nacht/Fenster/Außentemp/Raumtemp.
+    trigger:
+      - platform: state
+        entity_id: input_boolean.zs_heizung_master
+        from: "off"
+        to: "on"
+    condition: []
+    action:
+      - service: input_boolean.turn_on
+        target:
+          entity_id:
+            - input_boolean.az_heizung_automatik
+            - input_boolean.bz_heizung_automatik
+            - input_boolean.wz_heizung_automatik
+            - input_boolean.ku_heizung_automatik
+            - input_boolean.ki_heizung_automatik
+            - input_boolean.sz_heizung_automatik
+    mode: single
+
+  # ==========================================================================
+  # 3) NACHTSTART → Alle Thermostate AUS
+  #    (Manuelles Heizen bleibt erlaubt – die Raum-Automationen pausieren nur)
+  # ==========================================================================
+  - id: zs_heizung_nachtstart
+    alias: ZS – Heizung Nachtstart
+    description: >
+      Nachtzeit beginnt: Alle Thermostate ausschalten.
+      Manuelles Heizen ist weiterhin erlaubt.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.zs_heizung_nachtzeit
+        from: "off"
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_heizung_master
+        state: "on"
+    action:
+      - service: climate.turn_off
+        target:
+          entity_id:
+            - climate.az_heizung_01
+            - climate.bz_heizung_01
+            - climate.wz_heizungsgruppe_01
+            - climate.ku_heizung_01
+            - climate.ki_heizungsgruppe_01
+            - climate.sz_heizung_01
+    mode: single
+
+  # ==========================================================================
+  # 4) FRÜHE NACHT START → Nur KI + SZ Thermostate AUS
+  # ==========================================================================
+  - id: zs_heizung_fruehe_nachtstart
+    alias: ZS – Heizung Frühe Nacht Start (KI+SZ)
+    description: >
+      Frühe Nachtzeit beginnt: KI und SZ Thermostate ausschalten.
+      Betrifft nur Kinderzimmer und Schlafzimmer.
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.zs_heizung_fruehe_nacht_zeitfenster
+        from: "off"
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_heizung_master
+        state: "on"
+    action:
+      - service: climate.turn_off
+        target:
+          entity_id:
+            - climate.ki_heizungsgruppe_01
+            - climate.sz_heizung_01
+    mode: single
+
+  # ==========================================================================
+  # 5) HA NEUSTART → Heizlogik einmal anstoßen
+  # ==========================================================================
+  - id: zs_heizung_ha_neustart
+    alias: ZS – Heizung HA Neustart
+    description: >
+      Bei Home Assistant Neustart: Heizlogik einmal komplett durchlaufen lassen.
+    trigger:
+      - platform: homeassistant
+        event: start
+    condition:
+      - condition: state
+        entity_id: input_boolean.zs_heizung_master
+        state: "on"
+    action:
+      # Kurzes Aus/Ein der Raum-Automatiken erzwingt Neuauswertung
+      - service: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.az_heizung_automatik
+            - input_boolean.bz_heizung_automatik
+            - input_boolean.wz_heizung_automatik
+            - input_boolean.ku_heizung_automatik
+            - input_boolean.ki_heizung_automatik
+            - input_boolean.sz_heizung_automatik
+      - delay:
+          seconds: 2
+      - service: input_boolean.turn_on
+        target:
+          entity_id:
+            - input_boolean.az_heizung_automatik
+            - input_boolean.bz_heizung_automatik
+            - input_boolean.wz_heizung_automatik
+            - input_boolean.ku_heizung_automatik
+            - input_boolean.ki_heizung_automatik
+            - input_boolean.sz_heizung_automatik
+    mode: single

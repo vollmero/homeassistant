@@ -1,0 +1,959 @@
+# ==============================================================================
+# PACKAGE: Batterie-Tracking & Monitoring (ZS)
+#
+# Enthält:
+# - Kategorie A: Automatisch ausgelesene Batterie-Sensoren (ZHA/Zigbee/IKEA)
+#   → Werden direkt als sensor.*_batterie von HA bereitgestellt
+# - Kategorie B: Manuelle Eingabe für Tado X TRVs (kein Auto-Readout via Matter)
+#   → input_number für Ladestand, input_datetime für Zeitstempel
+#   → Predictive Template-Sensoren mit heizaktivitätsgewichteter Schätzung
+#   → history_stats für Heizstunden-Tracking
+# - Automationen: Auto-Zeitstempel, Erinnerungen, Warnungen
+# - Zusammenfassungs-Sensor für Dashboard
+#
+# Externe Abhängigkeiten:
+# - climate.az_heizung_01
+# - climate.bz_heizung_01
+# - climate.wz_heizung_01 / climate.wz_heizung_02
+# - climate.ki_heizung_01 / climate.ki_heizung_02
+# - climate.ku_heizung_01 (= Heizung 01 in Küche)
+# - climate.sz_heizung_01
+#
+# Batterie-Sensoren Kategorie A (automatisch, aus ZHA/Zigbee):
+# - sensor.az_fenster_01_batterie (Aqara)
+# - sensor.eve_door_20ebn9901_batterie (Eve, BZ)
+# - sensor.ikea_of_sweden_parasoll_door_window_sensor_batterie (KU_01)
+# - sensor.ikea_of_sweden_parasoll_door_window_sensor_batterie_2 (KU_02)
+# - sensor.ikea_of_sweden_parasoll_door_window_sensor_batterie_3 (KU_03)
+# - sensor.lumi_lumi_sensor_magnet_aq2_batterie (KI_01)
+# - sensor.lumi_lumi_sensor_magnet_aq2_batterie_2 (KI_02)
+# - sensor.lumi_lumi_sensor_magnet_aq2_batterie_3 (KU_04)
+# - sensor.lumi_lumi_sensor_magnet_aq2_batterie_4 (SZ_01)
+# - sensor.lumi_lumi_sensor_magnet_aq2_batterie_5 (WZ_01)
+# - sensor.lumi_lumi_sensor_magnet_aq2_batterie_6 (WZ_02)
+# - sensor.az_raumklima_01_batterie (Aqara)
+# - sensor.lumi_lumi_weather_batterie (KU Raumklima)
+# - sensor.lumi_lumi_weather_batterie_3 (BZ Raumklima)
+# - sensor.lumi_lumi_weather_batterie_4 (KI Raumklima)
+# - sensor.lumi_lumi_weather_batterie_5 (WZ Raumklima)
+# - sensor.lumi_lumi_weather_batterie_6 (SZ Raumklima)
+# - sensor.az_bewegung_batterie (Aqara Bewegungsmelder)
+# - sensor.flur_bewegungsmelder_batterie (Aqara)
+# - sensor.ikea_of_sweden_vallhorn_wireless_motion_sensor_batterie (KU)
+# - sensor.ikea_of_sweden_vallhorn_wireless_motion_sensor_batterie_2 (BZ)
+# - sensor.dimmer_1_schlafzimmer_batterie (SZ Dimmer 01)
+# - sensor.dimmer_2_schlafzimmer_batterie (SZ Dimmer 02)
+# - sensor.dimmer_kinderzimmer_batterie (KI Dimmer)
+#
+# EINBAU: In packages/ ablegen, HA Config prüfen + Neustart.
+# ==============================================================================
+
+
+# ==============================================================================
+# KATEGORIE B: TADO X TRVs – MANUELLE BATTERIE-EINGABE
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# HELFER: Ladestand-Eingabe pro Thermostat
+# → Werte werden aus der Tado App abgelesen und hier eingetragen
+# ------------------------------------------------------------------------------
+
+input_number:
+  # -- Arbeitszimmer --
+  bat_az_heizung_01_level:
+    name: BAT – AZ Heizung 01 Ladestand
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:battery
+
+  # -- Badezimmer --
+  bat_bz_heizung_01_level:
+    name: BAT – BZ Heizung 01 Ladestand
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:battery
+
+  # -- Wohnzimmer (2 TRVs) --
+  bat_wz_heizung_01_level:
+    name: BAT – WZ Heizung 01 Ladestand
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:battery
+
+  bat_wz_heizung_02_level:
+    name: BAT – WZ Heizung 02 Ladestand
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:battery
+
+  # -- Kinderzimmer (2 TRVs) --
+  bat_ki_heizung_01_level:
+    name: BAT – KI Heizung 01 Ladestand
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:battery
+
+  bat_ki_heizung_02_level:
+    name: BAT – KI Heizung 02 Ladestand
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:battery
+
+  # -- Küche --
+  bat_ku_heizung_01_level:
+    name: BAT – KU Heizung 01 Ladestand
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:battery
+
+  # -- Schlafzimmer --
+  bat_sz_heizung_01_level:
+    name: BAT – SZ Heizung 01 Ladestand
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:battery
+
+# ------------------------------------------------------------------------------
+# HELFER: Zeitstempel (letzte Eingabe + letzter Batteriewechsel)
+# → "updated" wird per Automation automatisch gesetzt
+# → "replaced" wird manuell gesetzt bei Batteriewechsel
+# ------------------------------------------------------------------------------
+
+input_datetime:
+  # -- Letzte Eingabe (auto-gesetzt per Automation) --
+  bat_az_heizung_01_updated:
+    name: BAT – AZ Heizung 01 Letzte Eingabe
+    has_date: true
+    has_time: true
+    icon: mdi:clock-outline
+
+  bat_bz_heizung_01_updated:
+    name: BAT – BZ Heizung 01 Letzte Eingabe
+    has_date: true
+    has_time: true
+    icon: mdi:clock-outline
+
+  bat_wz_heizung_01_updated:
+    name: BAT – WZ Heizung 01 Letzte Eingabe
+    has_date: true
+    has_time: true
+    icon: mdi:clock-outline
+
+  bat_wz_heizung_02_updated:
+    name: BAT – WZ Heizung 02 Letzte Eingabe
+    has_date: true
+    has_time: true
+    icon: mdi:clock-outline
+
+  bat_ki_heizung_01_updated:
+    name: BAT – KI Heizung 01 Letzte Eingabe
+    has_date: true
+    has_time: true
+    icon: mdi:clock-outline
+
+  bat_ki_heizung_02_updated:
+    name: BAT – KI Heizung 02 Letzte Eingabe
+    has_date: true
+    has_time: true
+    icon: mdi:clock-outline
+
+  bat_ku_heizung_01_updated:
+    name: BAT – KU Heizung 01 Letzte Eingabe
+    has_date: true
+    has_time: true
+    icon: mdi:clock-outline
+
+  bat_sz_heizung_01_updated:
+    name: BAT – SZ Heizung 01 Letzte Eingabe
+    has_date: true
+    has_time: true
+    icon: mdi:clock-outline
+
+  # -- Letzter Batteriewechsel (manuell gesetzt) --
+  bat_az_heizung_01_replaced:
+    name: BAT – AZ Heizung 01 Letzter Wechsel
+    has_date: true
+    has_time: false
+    icon: mdi:battery-sync
+
+  bat_bz_heizung_01_replaced:
+    name: BAT – BZ Heizung 01 Letzter Wechsel
+    has_date: true
+    has_time: false
+    icon: mdi:battery-sync
+
+  bat_wz_heizung_01_replaced:
+    name: BAT – WZ Heizung 01 Letzter Wechsel
+    has_date: true
+    has_time: false
+    icon: mdi:battery-sync
+
+  bat_wz_heizung_02_replaced:
+    name: BAT – WZ Heizung 02 Letzter Wechsel
+    has_date: true
+    has_time: false
+    icon: mdi:battery-sync
+
+  bat_ki_heizung_01_replaced:
+    name: BAT – KI Heizung 01 Letzter Wechsel
+    has_date: true
+    has_time: false
+    icon: mdi:battery-sync
+
+  bat_ki_heizung_02_replaced:
+    name: BAT – KI Heizung 02 Letzter Wechsel
+    has_date: true
+    has_time: false
+    icon: mdi:battery-sync
+
+  bat_ku_heizung_01_replaced:
+    name: BAT – KU Heizung 01 Letzter Wechsel
+    has_date: true
+    has_time: false
+    icon: mdi:battery-sync
+
+  bat_sz_heizung_01_replaced:
+    name: BAT – SZ Heizung 01 Letzter Wechsel
+    has_date: true
+    has_time: false
+    icon: mdi:battery-sync
+
+
+# ==============================================================================
+# HISTORY STATS: Heizstunden pro TRV (letzte 30 Tage)
+# → Basis für die heizaktivitätsgewichtete Batterie-Schätzung
+# ==============================================================================
+
+sensor:
+  # HINWEIS: history_stats kann NICHT im template:-Block stehen,
+  # sondern muss unter sensor: als Platform-Integration definiert werden.
+
+  # -- AZ --
+  - platform: history_stats
+    name: BAT – AZ Heizung 01 Heizstunden 30d
+    entity_id: climate.az_heizung_01
+    state: "heating"
+    type: time
+    start: "{{ now() - timedelta(days=30) }}"
+    end: "{{ now() }}"
+
+  # -- BZ --
+  - platform: history_stats
+    name: BAT – BZ Heizung 01 Heizstunden 30d
+    entity_id: climate.bz_heizung_01
+    state: "heating"
+    type: time
+    start: "{{ now() - timedelta(days=30) }}"
+    end: "{{ now() }}"
+
+  # -- WZ 01 --
+  - platform: history_stats
+    name: BAT – WZ Heizung 01 Heizstunden 30d
+    entity_id: climate.wz_heizung_01
+    state: "heating"
+    type: time
+    start: "{{ now() - timedelta(days=30) }}"
+    end: "{{ now() }}"
+
+  # -- WZ 02 --
+  - platform: history_stats
+    name: BAT – WZ Heizung 02 Heizstunden 30d
+    entity_id: climate.wz_heizung_02
+    state: "heating"
+    type: time
+    start: "{{ now() - timedelta(days=30) }}"
+    end: "{{ now() }}"
+
+  # -- KI 01 --
+  - platform: history_stats
+    name: BAT – KI Heizung 01 Heizstunden 30d
+    entity_id: climate.ki_heizung_01
+    state: "heating"
+    type: time
+    start: "{{ now() - timedelta(days=30) }}"
+    end: "{{ now() }}"
+
+  # -- KI 02 --
+  - platform: history_stats
+    name: BAT – KI Heizung 02 Heizstunden 30d
+    entity_id: climate.ki_heizung_02
+    state: "heating"
+    type: time
+    start: "{{ now() - timedelta(days=30) }}"
+    end: "{{ now() }}"
+
+  # -- KU --
+  # HINWEIS: Die Küchen-Heizung hat entity_id "climate.heizung_01" (ohne ku_ Prefix!)
+  # Wenn das nicht stimmt, bitte anpassen.
+  - platform: history_stats
+    name: BAT – KU Heizung 01 Heizstunden 30d
+    entity_id: climate.ku_heizung_01
+    state: "heating"
+    type: time
+    start: "{{ now() - timedelta(days=30) }}"
+    end: "{{ now() }}"
+
+  # -- SZ --
+  - platform: history_stats
+    name: BAT – SZ Heizung 01 Heizstunden 30d
+    entity_id: climate.sz_heizung_01
+    state: "heating"
+    type: time
+    start: "{{ now() - timedelta(days=30) }}"
+    end: "{{ now() }}"
+
+
+# ==============================================================================
+# TEMPLATE-SENSOREN: Geschätzte Batteriestände (Kategorie B)
+#
+# FORMEL:
+#   heating_ratio = heizstunden_30d / (30 × 24)
+#   weight_factor = 1.0 + (heating_ratio × 1.0)
+#     → idle: factor 1.0, 50% Heizzeit: 1.5, Dauer-Heizen: 2.0
+#   daily_drain  = (100 / 365) × weight_factor
+#   estimated    = last_input - (tage_seit_eingabe × daily_drain)
+#
+# CONFIDENCE:
+#   hoch    = letzte Eingabe < 14 Tage
+#   mittel  = letzte Eingabe 14–60 Tage
+#   niedrig = letzte Eingabe > 60 Tage
+#   keine   = noch nie eingegeben (Datum = 0 / ungesetzt)
+# ==============================================================================
+
+template:
+  - sensor:
+
+      # ========================================================================
+      # Macro: Wiederverwendbare Logik als Jinja2-Macro
+      # (wird in jedem Sensor inline genutzt, da HA keine globalen Macros hat)
+      # ========================================================================
+
+      # -- AZ Heizung 01 --
+      - name: BAT – AZ Heizung 01 Geschätzt
+        unique_id: bat_az_heizung_01_estimated
+        unit_of_measurement: "%"
+        device_class: battery
+        icon: >
+          {% set level = this.state | float(50) %}
+          {% if level <= 10 %}mdi:battery-10
+          {% elif level <= 25 %}mdi:battery-20
+          {% elif level <= 50 %}mdi:battery-50
+          {% elif level <= 75 %}mdi:battery-70
+          {% else %}mdi:battery
+          {% endif %}
+        state: >
+          {% set input_level = states('input_number.bat_az_heizung_01_level') | float(0) %}
+          {% set updated_str = states('input_datetime.bat_az_heizung_01_updated') %}
+          {% if updated_str in ['unknown', 'unavailable', ''] %}
+            {{ input_level }}
+          {% else %}
+            {% set updated = as_datetime(updated_str) %}
+            {% set days = ((now() - updated).total_seconds() / 86400) | float(0) %}
+            {% set heat_hours = states('sensor.bat_az_heizung_01_heizstunden_30d') | float(0) %}
+            {% set heat_ratio = heat_hours / 720 %}
+            {% set weight = 1.0 + heat_ratio %}
+            {% set daily_drain = (100 / 365) * weight %}
+            {% set estimated = input_level - (days * daily_drain) %}
+            {{ [estimated | round(0), 0] | max }}
+          {% endif %}
+        attributes:
+          confidence: >
+            {% set updated_str = states('input_datetime.bat_az_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}
+              keine
+            {% else %}
+              {% set updated = as_datetime(updated_str) %}
+              {% set days = ((now() - updated).total_seconds() / 86400) | float(0) %}
+              {% if days < 14 %}hoch
+              {% elif days < 60 %}mittel
+              {% else %}niedrig
+              {% endif %}
+            {% endif %}
+          tage_seit_eingabe: >
+            {% set updated_str = states('input_datetime.bat_az_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}
+              —
+            {% else %}
+              {% set updated = as_datetime(updated_str) %}
+              {{ ((now() - updated).total_seconds() / 86400) | round(0) }}
+            {% endif %}
+          heizstunden_30d: >
+            {{ states('sensor.bat_az_heizung_01_heizstunden_30d') | float(0) | round(1) }}
+          letzter_wechsel: >
+            {{ states('input_datetime.bat_az_heizung_01_replaced') }}
+          raum: Arbeitszimmer
+          geraet: AZ_Heizung_01
+          kategorie: manuell
+
+      # -- BZ Heizung 01 --
+      - name: BAT – BZ Heizung 01 Geschätzt
+        unique_id: bat_bz_heizung_01_estimated
+        unit_of_measurement: "%"
+        device_class: battery
+        icon: >
+          {% set level = this.state | float(50) %}
+          {% if level <= 10 %}mdi:battery-10
+          {% elif level <= 25 %}mdi:battery-20
+          {% elif level <= 50 %}mdi:battery-50
+          {% elif level <= 75 %}mdi:battery-70
+          {% else %}mdi:battery
+          {% endif %}
+        state: >
+          {% set input_level = states('input_number.bat_bz_heizung_01_level') | float(0) %}
+          {% set updated_str = states('input_datetime.bat_bz_heizung_01_updated') %}
+          {% if updated_str in ['unknown', 'unavailable', ''] %}
+            {{ input_level }}
+          {% else %}
+            {% set updated = as_datetime(updated_str) %}
+            {% set days = ((now() - updated).total_seconds() / 86400) | float(0) %}
+            {% set heat_hours = states('sensor.bat_bz_heizung_01_heizstunden_30d') | float(0) %}
+            {% set heat_ratio = heat_hours / 720 %}
+            {% set weight = 1.0 + heat_ratio %}
+            {% set daily_drain = (100 / 365) * weight %}
+            {% set estimated = input_level - (days * daily_drain) %}
+            {{ [estimated | round(0), 0] | max }}
+          {% endif %}
+        attributes:
+          confidence: >
+            {% set updated_str = states('input_datetime.bat_bz_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}keine
+            {% else %}
+              {% set days = ((now() - as_datetime(updated_str)).total_seconds() / 86400) | float(0) %}
+              {% if days < 14 %}hoch{% elif days < 60 %}mittel{% else %}niedrig{% endif %}
+            {% endif %}
+          tage_seit_eingabe: >
+            {% set updated_str = states('input_datetime.bat_bz_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}—
+            {% else %}{{ ((now() - as_datetime(updated_str)).total_seconds() / 86400) | round(0) }}{% endif %}
+          heizstunden_30d: "{{ states('sensor.bat_bz_heizung_01_heizstunden_30d') | float(0) | round(1) }}"
+          letzter_wechsel: "{{ states('input_datetime.bat_bz_heizung_01_replaced') }}"
+          raum: Badezimmer
+          geraet: BZ_Heizung_01
+          kategorie: manuell
+
+      # -- WZ Heizung 01 --
+      - name: BAT – WZ Heizung 01 Geschätzt
+        unique_id: bat_wz_heizung_01_estimated
+        unit_of_measurement: "%"
+        device_class: battery
+        icon: >
+          {% set level = this.state | float(50) %}
+          {% if level <= 10 %}mdi:battery-10
+          {% elif level <= 25 %}mdi:battery-20
+          {% elif level <= 50 %}mdi:battery-50
+          {% elif level <= 75 %}mdi:battery-70
+          {% else %}mdi:battery
+          {% endif %}
+        state: >
+          {% set input_level = states('input_number.bat_wz_heizung_01_level') | float(0) %}
+          {% set updated_str = states('input_datetime.bat_wz_heizung_01_updated') %}
+          {% if updated_str in ['unknown', 'unavailable', ''] %}
+            {{ input_level }}
+          {% else %}
+            {% set updated = as_datetime(updated_str) %}
+            {% set days = ((now() - updated).total_seconds() / 86400) | float(0) %}
+            {% set heat_hours = states('sensor.bat_wz_heizung_01_heizstunden_30d') | float(0) %}
+            {% set heat_ratio = heat_hours / 720 %}
+            {% set weight = 1.0 + heat_ratio %}
+            {% set daily_drain = (100 / 365) * weight %}
+            {% set estimated = input_level - (days * daily_drain) %}
+            {{ [estimated | round(0), 0] | max }}
+          {% endif %}
+        attributes:
+          confidence: >
+            {% set updated_str = states('input_datetime.bat_wz_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}keine
+            {% else %}
+              {% set days = ((now() - as_datetime(updated_str)).total_seconds() / 86400) | float(0) %}
+              {% if days < 14 %}hoch{% elif days < 60 %}mittel{% else %}niedrig{% endif %}
+            {% endif %}
+          tage_seit_eingabe: >
+            {% set updated_str = states('input_datetime.bat_wz_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}—
+            {% else %}{{ ((now() - as_datetime(updated_str)).total_seconds() / 86400) | round(0) }}{% endif %}
+          heizstunden_30d: "{{ states('sensor.bat_wz_heizung_01_heizstunden_30d') | float(0) | round(1) }}"
+          letzter_wechsel: "{{ states('input_datetime.bat_wz_heizung_01_replaced') }}"
+          raum: Wohnzimmer
+          geraet: WZ_Heizung_01
+          kategorie: manuell
+
+      # -- WZ Heizung 02 --
+      - name: BAT – WZ Heizung 02 Geschätzt
+        unique_id: bat_wz_heizung_02_estimated
+        unit_of_measurement: "%"
+        device_class: battery
+        icon: >
+          {% set level = this.state | float(50) %}
+          {% if level <= 10 %}mdi:battery-10
+          {% elif level <= 25 %}mdi:battery-20
+          {% elif level <= 50 %}mdi:battery-50
+          {% elif level <= 75 %}mdi:battery-70
+          {% else %}mdi:battery
+          {% endif %}
+        state: >
+          {% set input_level = states('input_number.bat_wz_heizung_02_level') | float(0) %}
+          {% set updated_str = states('input_datetime.bat_wz_heizung_02_updated') %}
+          {% if updated_str in ['unknown', 'unavailable', ''] %}
+            {{ input_level }}
+          {% else %}
+            {% set updated = as_datetime(updated_str) %}
+            {% set days = ((now() - updated).total_seconds() / 86400) | float(0) %}
+            {% set heat_hours = states('sensor.bat_wz_heizung_02_heizstunden_30d') | float(0) %}
+            {% set heat_ratio = heat_hours / 720 %}
+            {% set weight = 1.0 + heat_ratio %}
+            {% set daily_drain = (100 / 365) * weight %}
+            {% set estimated = input_level - (days * daily_drain) %}
+            {{ [estimated | round(0), 0] | max }}
+          {% endif %}
+        attributes:
+          confidence: >
+            {% set updated_str = states('input_datetime.bat_wz_heizung_02_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}keine
+            {% else %}
+              {% set days = ((now() - as_datetime(updated_str)).total_seconds() / 86400) | float(0) %}
+              {% if days < 14 %}hoch{% elif days < 60 %}mittel{% else %}niedrig{% endif %}
+            {% endif %}
+          tage_seit_eingabe: >
+            {% set updated_str = states('input_datetime.bat_wz_heizung_02_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}—
+            {% else %}{{ ((now() - as_datetime(updated_str)).total_seconds() / 86400) | round(0) }}{% endif %}
+          heizstunden_30d: "{{ states('sensor.bat_wz_heizung_02_heizstunden_30d') | float(0) | round(1) }}"
+          letzter_wechsel: "{{ states('input_datetime.bat_wz_heizung_02_replaced') }}"
+          raum: Wohnzimmer
+          geraet: WZ_Heizung_02
+          kategorie: manuell
+
+      # -- KI Heizung 01 --
+      - name: BAT – KI Heizung 01 Geschätzt
+        unique_id: bat_ki_heizung_01_estimated
+        unit_of_measurement: "%"
+        device_class: battery
+        icon: >
+          {% set level = this.state | float(50) %}
+          {% if level <= 10 %}mdi:battery-10
+          {% elif level <= 25 %}mdi:battery-20
+          {% elif level <= 50 %}mdi:battery-50
+          {% elif level <= 75 %}mdi:battery-70
+          {% else %}mdi:battery
+          {% endif %}
+        state: >
+          {% set input_level = states('input_number.bat_ki_heizung_01_level') | float(0) %}
+          {% set updated_str = states('input_datetime.bat_ki_heizung_01_updated') %}
+          {% if updated_str in ['unknown', 'unavailable', ''] %}
+            {{ input_level }}
+          {% else %}
+            {% set updated = as_datetime(updated_str) %}
+            {% set days = ((now() - updated).total_seconds() / 86400) | float(0) %}
+            {% set heat_hours = states('sensor.bat_ki_heizung_01_heizstunden_30d') | float(0) %}
+            {% set heat_ratio = heat_hours / 720 %}
+            {% set weight = 1.0 + heat_ratio %}
+            {% set daily_drain = (100 / 365) * weight %}
+            {% set estimated = input_level - (days * daily_drain) %}
+            {{ [estimated | round(0), 0] | max }}
+          {% endif %}
+        attributes:
+          confidence: >
+            {% set updated_str = states('input_datetime.bat_ki_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}keine
+            {% else %}
+              {% set days = ((now() - as_datetime(updated_str)).total_seconds() / 86400) | float(0) %}
+              {% if days < 14 %}hoch{% elif days < 60 %}mittel{% else %}niedrig{% endif %}
+            {% endif %}
+          tage_seit_eingabe: >
+            {% set updated_str = states('input_datetime.bat_ki_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}—
+            {% else %}{{ ((now() - as_datetime(updated_str)).total_seconds() / 86400) | round(0) }}{% endif %}
+          heizstunden_30d: "{{ states('sensor.bat_ki_heizung_01_heizstunden_30d') | float(0) | round(1) }}"
+          letzter_wechsel: "{{ states('input_datetime.bat_ki_heizung_01_replaced') }}"
+          raum: Kinderzimmer
+          geraet: KI_Heizung_01
+          kategorie: manuell
+
+      # -- KI Heizung 02 --
+      - name: BAT – KI Heizung 02 Geschätzt
+        unique_id: bat_ki_heizung_02_estimated
+        unit_of_measurement: "%"
+        device_class: battery
+        icon: >
+          {% set level = this.state | float(50) %}
+          {% if level <= 10 %}mdi:battery-10
+          {% elif level <= 25 %}mdi:battery-20
+          {% elif level <= 50 %}mdi:battery-50
+          {% elif level <= 75 %}mdi:battery-70
+          {% else %}mdi:battery
+          {% endif %}
+        state: >
+          {% set input_level = states('input_number.bat_ki_heizung_02_level') | float(0) %}
+          {% set updated_str = states('input_datetime.bat_ki_heizung_02_updated') %}
+          {% if updated_str in ['unknown', 'unavailable', ''] %}
+            {{ input_level }}
+          {% else %}
+            {% set updated = as_datetime(updated_str) %}
+            {% set days = ((now() - updated).total_seconds() / 86400) | float(0) %}
+            {% set heat_hours = states('sensor.bat_ki_heizung_02_heizstunden_30d') | float(0) %}
+            {% set heat_ratio = heat_hours / 720 %}
+            {% set weight = 1.0 + heat_ratio %}
+            {% set daily_drain = (100 / 365) * weight %}
+            {% set estimated = input_level - (days * daily_drain) %}
+            {{ [estimated | round(0), 0] | max }}
+          {% endif %}
+        attributes:
+          confidence: >
+            {% set updated_str = states('input_datetime.bat_ki_heizung_02_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}keine
+            {% else %}
+              {% set days = ((now() - as_datetime(updated_str)).total_seconds() / 86400) | float(0) %}
+              {% if days < 14 %}hoch{% elif days < 60 %}mittel{% else %}niedrig{% endif %}
+            {% endif %}
+          tage_seit_eingabe: >
+            {% set updated_str = states('input_datetime.bat_ki_heizung_02_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}—
+            {% else %}{{ ((now() - as_datetime(updated_str)).total_seconds() / 86400) | round(0) }}{% endif %}
+          heizstunden_30d: "{{ states('sensor.bat_ki_heizung_02_heizstunden_30d') | float(0) | round(1) }}"
+          letzter_wechsel: "{{ states('input_datetime.bat_ki_heizung_02_replaced') }}"
+          raum: Kinderzimmer
+          geraet: KI_Heizung_02
+          kategorie: manuell
+
+      # -- KU Heizung 01 --
+      - name: BAT – KU Heizung 01 Geschätzt
+        unique_id: bat_ku_heizung_01_estimated
+        unit_of_measurement: "%"
+        device_class: battery
+        icon: >
+          {% set level = this.state | float(50) %}
+          {% if level <= 10 %}mdi:battery-10
+          {% elif level <= 25 %}mdi:battery-20
+          {% elif level <= 50 %}mdi:battery-50
+          {% elif level <= 75 %}mdi:battery-70
+          {% else %}mdi:battery
+          {% endif %}
+        state: >
+          {% set input_level = states('input_number.bat_ku_heizung_01_level') | float(0) %}
+          {% set updated_str = states('input_datetime.bat_ku_heizung_01_updated') %}
+          {% if updated_str in ['unknown', 'unavailable', ''] %}
+            {{ input_level }}
+          {% else %}
+            {% set updated = as_datetime(updated_str) %}
+            {% set days = ((now() - updated).total_seconds() / 86400) | float(0) %}
+            {% set heat_hours = states('sensor.bat_ku_heizung_01_heizstunden_30d') | float(0) %}
+            {% set heat_ratio = heat_hours / 720 %}
+            {% set weight = 1.0 + heat_ratio %}
+            {% set daily_drain = (100 / 365) * weight %}
+            {% set estimated = input_level - (days * daily_drain) %}
+            {{ [estimated | round(0), 0] | max }}
+          {% endif %}
+        attributes:
+          confidence: >
+            {% set updated_str = states('input_datetime.bat_ku_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}keine
+            {% else %}
+              {% set days = ((now() - as_datetime(updated_str)).total_seconds() / 86400) | float(0) %}
+              {% if days < 14 %}hoch{% elif days < 60 %}mittel{% else %}niedrig{% endif %}
+            {% endif %}
+          tage_seit_eingabe: >
+            {% set updated_str = states('input_datetime.bat_ku_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}—
+            {% else %}{{ ((now() - as_datetime(updated_str)).total_seconds() / 86400) | round(0) }}{% endif %}
+          heizstunden_30d: "{{ states('sensor.bat_ku_heizung_01_heizstunden_30d') | float(0) | round(1) }}"
+          letzter_wechsel: "{{ states('input_datetime.bat_ku_heizung_01_replaced') }}"
+          raum: Küche
+          geraet: KU_Heizung_01
+          kategorie: manuell
+
+      # -- SZ Heizung 01 --
+      - name: BAT – SZ Heizung 01 Geschätzt
+        unique_id: bat_sz_heizung_01_estimated
+        unit_of_measurement: "%"
+        device_class: battery
+        icon: >
+          {% set level = this.state | float(50) %}
+          {% if level <= 10 %}mdi:battery-10
+          {% elif level <= 25 %}mdi:battery-20
+          {% elif level <= 50 %}mdi:battery-50
+          {% elif level <= 75 %}mdi:battery-70
+          {% else %}mdi:battery
+          {% endif %}
+        state: >
+          {% set input_level = states('input_number.bat_sz_heizung_01_level') | float(0) %}
+          {% set updated_str = states('input_datetime.bat_sz_heizung_01_updated') %}
+          {% if updated_str in ['unknown', 'unavailable', ''] %}
+            {{ input_level }}
+          {% else %}
+            {% set updated = as_datetime(updated_str) %}
+            {% set days = ((now() - updated).total_seconds() / 86400) | float(0) %}
+            {% set heat_hours = states('sensor.bat_sz_heizung_01_heizstunden_30d') | float(0) %}
+            {% set heat_ratio = heat_hours / 720 %}
+            {% set weight = 1.0 + heat_ratio %}
+            {% set daily_drain = (100 / 365) * weight %}
+            {% set estimated = input_level - (days * daily_drain) %}
+            {{ [estimated | round(0), 0] | max }}
+          {% endif %}
+        attributes:
+          confidence: >
+            {% set updated_str = states('input_datetime.bat_sz_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}keine
+            {% else %}
+              {% set days = ((now() - as_datetime(updated_str)).total_seconds() / 86400) | float(0) %}
+              {% if days < 14 %}hoch{% elif days < 60 %}mittel{% else %}niedrig{% endif %}
+            {% endif %}
+          tage_seit_eingabe: >
+            {% set updated_str = states('input_datetime.bat_sz_heizung_01_updated') %}
+            {% if updated_str in ['unknown', 'unavailable', ''] %}—
+            {% else %}{{ ((now() - as_datetime(updated_str)).total_seconds() / 86400) | round(0) }}{% endif %}
+          heizstunden_30d: "{{ states('sensor.bat_sz_heizung_01_heizstunden_30d') | float(0) | round(1) }}"
+          letzter_wechsel: "{{ states('input_datetime.bat_sz_heizung_01_replaced') }}"
+          raum: Schlafzimmer
+          geraet: SZ_Heizung_01
+          kategorie: manuell
+
+      # ========================================================================
+      # Zusammenfassungs-Sensor: Anzahl kritischer Batterien
+      # ========================================================================
+      - name: ZS – Batterien Kritisch
+        unique_id: zs_batterien_kritisch
+        icon: mdi:battery-alert
+        unit_of_measurement: ""
+        state: >
+          {% set threshold = 25 %}
+          {% set auto = states.sensor
+              | selectattr('attributes.device_class', 'defined')
+              | selectattr('attributes.device_class', 'eq', 'battery')
+              | rejectattr('entity_id', 'search', 'iphone|ipad|watch|sap_|kf4w')
+              | selectattr('state', 'is_number')
+              | list %}
+          {% set auto_crit = auto | selectattr('state', 'lt', threshold | string) | list | count %}
+          {% set manual_sensors = [
+              'sensor.bat_az_heizung_01_geschatzt',
+              'sensor.bat_bz_heizung_01_geschatzt',
+              'sensor.bat_wz_heizung_01_geschatzt',
+              'sensor.bat_wz_heizung_02_geschatzt',
+              'sensor.bat_ki_heizung_01_geschatzt',
+              'sensor.bat_ki_heizung_02_geschatzt',
+              'sensor.bat_ku_heizung_01_geschatzt',
+              'sensor.bat_sz_heizung_01_geschatzt'
+            ] %}
+          {% set ns = namespace(manual_crit=0) %}
+          {% for s in manual_sensors %}
+            {% if states(s) | float(100) < threshold %}
+              {% set ns.manual_crit = ns.manual_crit + 1 %}
+            {% endif %}
+          {% endfor %}
+          {{ auto_crit + ns.manual_crit }}
+
+
+# ==============================================================================
+# AUTOMATIONEN
+# ==============================================================================
+
+automation:
+
+  # ============================================================================
+  # 1) AUTO-ZEITSTEMPEL: Wenn Ladestand geändert wird → Datum aktualisieren
+  # ============================================================================
+  - id: bat_auto_timestamp
+    alias: BAT – Auto-Zeitstempel bei Eingabe
+    description: >
+      Wenn ein Tado-Batteriestand per Input-Number geändert wird,
+      wird automatisch der Zeitstempel der letzten Eingabe aktualisiert.
+    trigger:
+      - platform: state
+        entity_id:
+          - input_number.bat_az_heizung_01_level
+          - input_number.bat_bz_heizung_01_level
+          - input_number.bat_wz_heizung_01_level
+          - input_number.bat_wz_heizung_02_level
+          - input_number.bat_ki_heizung_01_level
+          - input_number.bat_ki_heizung_02_level
+          - input_number.bat_ku_heizung_01_level
+          - input_number.bat_sz_heizung_01_level
+    condition:
+      # Nur wenn sich der Wert tatsächlich geändert hat (nicht bei HA-Neustart)
+      - condition: template
+        value_template: "{{ trigger.from_state.state != trigger.to_state.state }}"
+    action:
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: >
+            {% set map = {
+              'input_number.bat_az_heizung_01_level': 'input_datetime.bat_az_heizung_01_updated',
+              'input_number.bat_bz_heizung_01_level': 'input_datetime.bat_bz_heizung_01_updated',
+              'input_number.bat_wz_heizung_01_level': 'input_datetime.bat_wz_heizung_01_updated',
+              'input_number.bat_wz_heizung_02_level': 'input_datetime.bat_wz_heizung_02_updated',
+              'input_number.bat_ki_heizung_01_level': 'input_datetime.bat_ki_heizung_01_updated',
+              'input_number.bat_ki_heizung_02_level': 'input_datetime.bat_ki_heizung_02_updated',
+              'input_number.bat_ku_heizung_01_level': 'input_datetime.bat_ku_heizung_01_updated',
+              'input_number.bat_sz_heizung_01_level': 'input_datetime.bat_sz_heizung_01_updated'
+            } %}
+            {{ map[trigger.entity_id] }}
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+    mode: queued
+    max: 8
+
+  # ============================================================================
+  # 2) ERINNERUNG: Confidence niedrig → Push "Bitte Tado App checken"
+  #    Prüfung 1× täglich um 10:00 Uhr
+  # ============================================================================
+  - id: bat_reminder_low_confidence
+    alias: BAT – Erinnerung Tado-Batterien prüfen
+    description: >
+      Tägliche Prüfung: Wenn ein Tado-Thermostat-Batteriestand seit
+      mehr als 60 Tagen nicht aktualisiert wurde → Erinnerung per Push.
+    trigger:
+      - platform: time
+        at: "10:00:00"
+    condition:
+      - condition: template
+        value_template: >
+          {% set sensors = [
+              'sensor.bat_az_heizung_01_geschatzt',
+              'sensor.bat_bz_heizung_01_geschatzt',
+              'sensor.bat_wz_heizung_01_geschatzt',
+              'sensor.bat_wz_heizung_02_geschatzt',
+              'sensor.bat_ki_heizung_01_geschatzt',
+              'sensor.bat_ki_heizung_02_geschatzt',
+              'sensor.bat_ku_heizung_01_geschatzt',
+              'sensor.bat_sz_heizung_01_geschatzt'
+            ] %}
+          {% set ns = namespace(found=false) %}
+          {% for s in sensors %}
+            {% if state_attr(s, 'confidence') == 'niedrig' %}
+              {% set ns.found = true %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.found }}
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "🔋 Tado-Batterie Check"
+          message: >
+            {% set sensors = [
+                'sensor.bat_az_heizung_01_geschatzt',
+                'sensor.bat_bz_heizung_01_geschatzt',
+                'sensor.bat_wz_heizung_01_geschatzt',
+                'sensor.bat_wz_heizung_02_geschatzt',
+                'sensor.bat_ki_heizung_01_geschatzt',
+                'sensor.bat_ki_heizung_02_geschatzt',
+                'sensor.bat_ku_heizung_01_geschatzt',
+                'sensor.bat_sz_heizung_01_geschatzt'
+              ] %}
+            {% set ns = namespace(stale=[]) %}
+            {% for s in sensors %}
+              {% if state_attr(s, 'confidence') == 'niedrig' %}
+                {% set ns.stale = ns.stale + [state_attr(s, 'geraet') ~ ' (' ~ state_attr(s, 'tage_seit_eingabe') ~ ' Tage)'] %}
+              {% endif %}
+            {% endfor %}
+            Folgende Thermostate wurden seit >60 Tagen nicht aktualisiert:
+            {{ ns.stale | join(', ') }}
+            Bitte in der Tado-App den Batteriestand prüfen.
+          data:
+            tag: bat_reminder
+            group: batterie
+    mode: single
+
+  # ============================================================================
+  # 3) WARNUNG: Geschätzter Stand unter 15% → Wechsel einplanen
+  # ============================================================================
+  - id: bat_warning_low_level
+    alias: BAT – Warnung Batterie niedrig (Tado)
+    description: >
+      Wenn ein geschätzter Tado-Batteriestand unter 15% fällt → Push-Warnung.
+    trigger:
+      - platform: numeric_state
+        entity_id:
+          - sensor.bat_az_heizung_01_geschatzt
+          - sensor.bat_bz_heizung_01_geschatzt
+          - sensor.bat_wz_heizung_01_geschatzt
+          - sensor.bat_wz_heizung_02_geschatzt
+          - sensor.bat_ki_heizung_01_geschatzt
+          - sensor.bat_ki_heizung_02_geschatzt
+          - sensor.bat_ku_heizung_01_geschatzt
+          - sensor.bat_sz_heizung_01_geschatzt
+        below: 15
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "⚠️ Tado-Batterie fast leer"
+          message: >
+            {{ state_attr(trigger.entity_id, 'geraet') }}
+            ({{ state_attr(trigger.entity_id, 'raum') }}):
+            Geschätzt nur noch {{ states(trigger.entity_id) }}%.
+            Batteriewechsel bald einplanen!
+          data:
+            tag: "bat_low_{{ trigger.entity_id }}"
+            group: batterie
+    mode: queued
+    max: 8
+
+  # ============================================================================
+  # 4) WARNUNG: Auto-Readout Batterie unter 15% (Kategorie A)
+  # ============================================================================
+  - id: bat_warning_auto_low
+    alias: BAT – Warnung Batterie niedrig (Auto)
+    description: >
+      Wenn ein automatisch ausgelesener Batterie-Sensor unter 15% fällt.
+    trigger:
+      - platform: numeric_state
+        entity_id:
+          - sensor.az_fenster_01_batterie
+          - sensor.eve_door_20ebn9901_batterie
+          - sensor.ikea_of_sweden_parasoll_door_window_sensor_batterie
+          - sensor.ikea_of_sweden_parasoll_door_window_sensor_batterie_2
+          - sensor.ikea_of_sweden_parasoll_door_window_sensor_batterie_3
+          - sensor.lumi_lumi_sensor_magnet_aq2_batterie
+          - sensor.lumi_lumi_sensor_magnet_aq2_batterie_2
+          - sensor.lumi_lumi_sensor_magnet_aq2_batterie_3
+          - sensor.lumi_lumi_sensor_magnet_aq2_batterie_4
+          - sensor.lumi_lumi_sensor_magnet_aq2_batterie_5
+          - sensor.lumi_lumi_sensor_magnet_aq2_batterie_6
+          - sensor.az_raumklima_01_batterie
+          - sensor.lumi_lumi_weather_batterie
+          - sensor.lumi_lumi_weather_batterie_3
+          - sensor.lumi_lumi_weather_batterie_4
+          - sensor.lumi_lumi_weather_batterie_5
+          - sensor.lumi_lumi_weather_batterie_6
+          - sensor.az_bewegung_batterie
+          - sensor.flur_bewegungsmelder_batterie
+          - sensor.ikea_of_sweden_vallhorn_wireless_motion_sensor_batterie
+          - sensor.ikea_of_sweden_vallhorn_wireless_motion_sensor_batterie_2
+          - sensor.dimmer_1_schlafzimmer_batterie
+          - sensor.dimmer_2_schlafzimmer_batterie
+          - sensor.dimmer_kinderzimmer_batterie
+        below: 15
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "⚠️ Sensor-Batterie niedrig"
+          message: >
+            {{ trigger.to_state.attributes.friendly_name | default(trigger.entity_id) }}:
+            Nur noch {{ trigger.to_state.state }}%!
+          data:
+            tag: "bat_auto_{{ trigger.entity_id }}"
+            group: batterie
+    mode: queued
+    max: 8

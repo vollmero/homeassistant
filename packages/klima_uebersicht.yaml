@@ -1,0 +1,168 @@
+# ==============================================================================
+# PACKAGE: Klima-Übersicht (Heizung + Fenster kombiniert)
+#
+# Template-Sensor: sensor.klima_uebersicht
+#
+# Zeigt kombiniert an, welche Räume gerade heizen und/oder
+# offene Fenster haben. Für Bubble Card Dashboard-Karte.
+#
+# State-Beispiele:
+#   - "Alles ruhig"        (nichts aktiv)
+#   - "2x 🔥  ·  1x 🪟"   (2 Heizungen + 1 Fenster)
+#   - "3x 🔥"              (nur Heizungen)
+#   - "2x 🪟"              (nur Fenster)
+#
+# Attribute:
+#   - heizung_raeume:  "AZ, WZ" oder ""
+#   - fenster_raeume:  "BZ, KI" oder ""
+#   - heizung_anzahl:  2
+#   - fenster_anzahl:  1
+#   - detail_text:     "🔥 AZ, WZ  ·  🪟 BZ, KI"
+#
+# EINBAU: In packages/ ablegen, HA Config prüfen + Neustart.
+# ==============================================================================
+
+template:
+  - sensor:
+      - name: "Klima Übersicht"
+        unique_id: klima_uebersicht
+        state: >
+          {% set th = [
+            'climate.az_heizung_01', 'climate.bz_heizung_01',
+            'climate.wz_heizungsgruppe_01', 'climate.ku_heizung_01',
+            'climate.ki_heizungsgruppe_01', 'climate.sz_heizung_01'
+          ] -%}
+          {% set fe = [
+            'binary_sensor.az_fenster_01_offnung',
+            'binary_sensor.bz_fenster_01',
+            'binary_sensor.wz_fenstergruppe_01',
+            'binary_sensor.ku_fenstergruppe_01',
+            'binary_sensor.ki_fenstergruppe_01',
+            'binary_sensor.sz_fenster_01'
+          ] -%}
+          {% set h = th | select('is_state', 'heat') | list | count -%}
+          {% set f = fe | select('is_state', 'on') | list | count -%}
+          {%- if h == 0 and f == 0 -%}
+            Alles ruhig
+          {%- else -%}
+            {% set parts = [] -%}
+            {% if h == 1 -%}
+              {% set parts = parts + ['1 Raum heizt'] -%}
+            {% elif h > 1 -%}
+              {% set parts = parts + [h ~ ' Räume heizen'] -%}
+            {% endif -%}
+            {% if f == 1 -%}
+              {% set parts = parts + ['1 Fenster offen'] -%}
+            {% elif f > 1 -%}
+              {% set parts = parts + [f ~ ' Fenster offen'] -%}
+            {% endif -%}
+            {{ parts | join(', ') }}
+          {%- endif %}
+        attributes:
+          heizung_raeume: >
+            {% set th = {
+              'AZ': 'climate.az_heizung_01',
+              'BZ': 'climate.bz_heizung_01',
+              'WZ': 'climate.wz_heizungsgruppe_01',
+              'KU': 'climate.ku_heizung_01',
+              'KI': 'climate.ki_heizungsgruppe_01',
+              'SZ': 'climate.sz_heizung_01'
+            } %}
+            {% set ns = namespace(aktiv=[]) %}
+            {% for name, entity in th.items() %}
+              {% if is_state(entity, 'heat') %}
+                {% set ns.aktiv = ns.aktiv + [name] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.aktiv | join(', ') if ns.aktiv | count > 0 else '' }}
+          fenster_raeume: >
+            {% set fe = {
+              'AZ': 'binary_sensor.az_fenster_01_offnung',
+              'BZ': 'binary_sensor.bz_fenster_01',
+              'WZ': 'binary_sensor.wz_fenstergruppe_01',
+              'KU': 'binary_sensor.ku_fenstergruppe_01',
+              'KI': 'binary_sensor.ki_fenstergruppe_01',
+              'SZ': 'binary_sensor.sz_fenster_01'
+            } %}
+            {% set ns = namespace(offen=[]) %}
+            {% for name, entity in fe.items() %}
+              {% if is_state(entity, 'on') %}
+                {% set ns.offen = ns.offen + [name] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.offen | join(', ') if ns.offen | count > 0 else '' }}
+          heizung_anzahl: >
+            {% set th = [
+              'climate.az_heizung_01', 'climate.bz_heizung_01',
+              'climate.wz_heizungsgruppe_01', 'climate.ku_heizung_01',
+              'climate.ki_heizungsgruppe_01', 'climate.sz_heizung_01'
+            ] %}
+            {{ th | select('is_state', 'heat') | list | count }}
+          fenster_anzahl: >
+            {% set fe = [
+              'binary_sensor.az_fenster_01_offnung',
+              'binary_sensor.bz_fenster_01',
+              'binary_sensor.wz_fenstergruppe_01',
+              'binary_sensor.ku_fenstergruppe_01',
+              'binary_sensor.ki_fenstergruppe_01',
+              'binary_sensor.sz_fenster_01'
+            ] %}
+            {{ fe | select('is_state', 'on') | list | count }}
+          detail_text: >
+            {% set th = {
+              'AZ': 'climate.az_heizung_01',
+              'BZ': 'climate.bz_heizung_01',
+              'WZ': 'climate.wz_heizungsgruppe_01',
+              'KU': 'climate.ku_heizung_01',
+              'KI': 'climate.ki_heizungsgruppe_01',
+              'SZ': 'climate.sz_heizung_01'
+            } %}
+            {% set fe = {
+              'AZ': 'binary_sensor.az_fenster_01_offnung',
+              'BZ': 'binary_sensor.bz_fenster_01',
+              'WZ': 'binary_sensor.wz_fenstergruppe_01',
+              'KU': 'binary_sensor.ku_fenstergruppe_01',
+              'KI': 'binary_sensor.ki_fenstergruppe_01',
+              'SZ': 'binary_sensor.sz_fenster_01'
+            } %}
+            {% set ns_h = namespace(aktiv=[]) %}
+            {% for name, entity in th.items() %}
+              {% if is_state(entity, 'heat') %}
+                {% set ns_h.aktiv = ns_h.aktiv + [name] %}
+              {% endif %}
+            {% endfor %}
+            {% set ns_f = namespace(offen=[]) %}
+            {% for name, entity in fe.items() %}
+              {% if is_state(entity, 'on') %}
+                {% set ns_f.offen = ns_f.offen + [name] %}
+              {% endif %}
+            {% endfor %}
+            {% set parts = [] %}
+            {% if ns_h.aktiv | count > 0 %}
+              {% set parts = parts + ['🔥 ' ~ ns_h.aktiv | join(', ')] %}
+            {% endif %}
+            {% if ns_f.offen | count > 0 %}
+              {% set parts = parts + ['🪟 ' ~ ns_f.offen | join(', ')] %}
+            {% endif %}
+            {{ parts | join('  ·  ') }}
+        icon: >
+          {% set th = [
+            'climate.az_heizung_01', 'climate.bz_heizung_01',
+            'climate.wz_heizungsgruppe_01', 'climate.ku_heizung_01',
+            'climate.ki_heizungsgruppe_01', 'climate.sz_heizung_01'
+          ] %}
+          {% set fe = [
+            'binary_sensor.az_fenster_01_offnung',
+            'binary_sensor.bz_fenster_01',
+            'binary_sensor.wz_fenstergruppe_01',
+            'binary_sensor.ku_fenstergruppe_01',
+            'binary_sensor.ki_fenstergruppe_01',
+            'binary_sensor.sz_fenster_01'
+          ] %}
+          {% set h = th | select('is_state', 'heat') | list | count %}
+          {% set f = fe | select('is_state', 'on') | list | count %}
+          {% if f > 0 and h > 0 %}mdi:home-alert
+          {% elif f > 0 %}mdi:window-open-variant
+          {% elif h > 0 %}mdi:radiator
+          {% else %}mdi:home-check
+          {% endif %}

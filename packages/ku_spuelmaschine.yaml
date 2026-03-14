@@ -1,0 +1,589 @@
+#############################################
+# Paket: KU - Spuelmaschine (V2.1)
+#
+# Steckdose: switch.ku_spuelmaschine
+# Sensoren:  sensor.ku_spuelmaschine_leistung
+#            sensor.ku_spuelmaschine_summe_verbraucht
+#
+# Notify:    notify.mobile_app_iphone_15_pro_max_von_oliver
+#            notify.mobile_app_iphone_weini
+#
+# Aenderungen V2.1:
+# 9. Nachtabschaltung - Steckdose zeitgesteuert aus/ein
+#    (nur wenn kein Spuelgang laeuft)
+#
+# Enthaelt aus V2.0:
+# 1. Konfigurierbare Schwellenwerte (Start/Ende Watt)
+# 2. Laufzeit-Erfassung pro Spuelgang
+# 3. Kostenberechnung mit einstellbarem Strompreis
+# 5. Robuste Persistenz (unknown/unavailable-Handling)
+# 6. Watchdog bei Sensorausfall (6h Timeout)
+# 7. Durchschnittsverbrauch pro Spuelgang
+# 8. Reichhaltigere Benachrichtigungen
+#############################################
+
+
+#######################
+# Helfer
+#######################
+
+input_boolean:
+  ku_spuelmaschine_running:
+    name: KU SM laeuft
+    icon: mdi:dishwasher
+
+  # Nachtabschaltung (Punkt 9)
+  ku_spuelmaschine_nacht_aktiv:
+    name: KU SM Nachtabschaltung aktiv
+    icon: mdi:power-sleep
+
+input_number:
+  # Konfigurierbare Schwellenwerte (Punkt 1)
+  ku_spuelmaschine_start_schwelle:
+    name: KU SM Startschwelle
+    min: 1
+    max: 50
+    step: 1
+    unit_of_measurement: "W"
+    mode: slider
+
+  ku_spuelmaschine_ende_schwelle:
+    name: KU SM Endeschwelle
+    min: 0
+    max: 20
+    step: 0.5
+    unit_of_measurement: "W"
+    mode: slider
+
+  # Messwerte
+  ku_spuelmaschine_last_cycle_start_kwh:
+    name: KU SM Startstand kWh
+    min: 0
+    max: 99999
+    step: 0.001
+    mode: box
+    unit_of_measurement: "kWh"
+
+  ku_spuelmaschine_last_cycle_kwh:
+    name: KU SM letzter Verbrauch
+    min: 0
+    max: 50
+    step: 0.01
+    mode: box
+    unit_of_measurement: "kWh"
+
+  # Laufzeit (Punkt 2)
+  ku_spuelmaschine_last_cycle_minutes:
+    name: KU SM letzte Laufzeit
+    min: 0
+    max: 600
+    step: 1
+    mode: box
+    unit_of_measurement: "min"
+
+# Startzeit fuer Laufzeit-Berechnung (Punkt 2)
+# Nachtabschaltung Zeitfenster (Punkt 9)
+input_datetime:
+  ku_spuelmaschine_start_zeit:
+    name: KU SM Startzeit
+    has_date: true
+    has_time: true
+
+  ku_spuelmaschine_nacht_start:
+    name: KU SM Nacht Start
+    has_date: false
+    has_time: true
+    icon: mdi:weather-night
+
+  ku_spuelmaschine_nacht_ende:
+    name: KU SM Nacht Ende
+    has_date: false
+    has_time: true
+    icon: mdi:weather-sunset-up
+
+counter:
+  ku_spuelmaschine_runs_total:
+    name: KU SM Laeufe gesamt
+    initial: 0
+    step: 1
+    icon: mdi:counter
+
+# Watchdog-Timer (Punkt 6)
+timer:
+  ku_spuelmaschine_watchdog:
+    name: KU SM Watchdog
+    duration: "06:00:00"
+    restore: true
+
+
+#######################
+# Verbrauchszaehler
+#######################
+
+utility_meter:
+  # kWh-Verbrauch
+  ku_spuelmaschine_kwh_week:
+    source: sensor.ku_spuelmaschine_summe_verbraucht
+    cycle: weekly
+
+  ku_spuelmaschine_kwh_month:
+    source: sensor.ku_spuelmaschine_summe_verbraucht
+    cycle: monthly
+
+  ku_spuelmaschine_kwh_year:
+    source: sensor.ku_spuelmaschine_summe_verbraucht
+    cycle: yearly
+
+  # Anzahl Spuelgaenge
+  ku_spuelmaschine_runs_week:
+    source: counter.ku_spuelmaschine_runs_total
+    cycle: weekly
+
+  ku_spuelmaschine_runs_month:
+    source: counter.ku_spuelmaschine_runs_total
+    cycle: monthly
+
+  ku_spuelmaschine_runs_year:
+    source: counter.ku_spuelmaschine_runs_total
+    cycle: yearly
+
+
+#######################
+# Template-Sensoren
+#######################
+
+template:
+  - binary_sensor:
+      # Nachtabschaltung Zeitfenster (Punkt 9)
+      - name: "KU SM Nachtzeit aktiv"
+        unique_id: ku_sm_nachtzeit_aktiv
+        icon: >
+          {% if is_state('binary_sensor.ku_sm_nachtzeit_aktiv','on') %}
+            mdi:weather-night
+          {% else %}
+            mdi:weather-sunset-up
+          {% endif %}
+        state: >
+          {% set start = states('input_datetime.ku_spuelmaschine_nacht_start')[0:5] %}
+          {% set end = states('input_datetime.ku_spuelmaschine_nacht_ende')[0:5] %}
+          {% set now_t = now().strftime('%H:%M') %}
+          {% if not start or not end %}
+            {{ false }}
+          {% elif start < end %}
+            {{ start <= now_t and now_t < end }}
+          {% else %}
+            {{ now_t >= start or now_t < end }}
+          {% endif %}
+
+  - sensor:
+      # Durchschnittsverbrauch (Punkt 7)
+      - name: "KU SM Durchschnitt kWh"
+        unique_id: ku_spuelmaschine_avg_kwh
+        unit_of_measurement: "kWh"
+        icon: mdi:chart-line
+        state: >
+          {% set kwh = states('sensor.ku_spuelmaschine_kwh_year') | float(0) %}
+          {% set runs = states('sensor.ku_spuelmaschine_runs_year') | float(0) %}
+          {% if runs > 0 %}
+            {{ (kwh / runs) | round(2) }}
+          {% else %}
+            0
+          {% endif %}
+
+      # Laeufe gesamt
+      - name: "KU SM Laeufe gesamt"
+        unique_id: ku_spuelmaschine_runs_total_sensor
+        unit_of_measurement: "Spuelgaenge"
+        icon: mdi:counter
+        state: >
+          {{ states('counter.ku_spuelmaschine_runs_total') | int(0) }}
+
+      # Anzeige-Sensoren (Punkt 5: 0 statt unknown)
+      - name: "KU SM Spuelgaenge Woche"
+        unique_id: ku_spuelmaschine_runs_week_display
+        unit_of_measurement: "Spuelgaenge"
+        icon: mdi:poll
+        state: >
+          {% set v = states('sensor.ku_spuelmaschine_runs_week') %}
+          {{ 0 if v in ['unknown','unavailable','none'] else v | int(0) }}
+
+      - name: "KU SM Spuelgaenge Monat"
+        unique_id: ku_spuelmaschine_runs_month_display
+        unit_of_measurement: "Spuelgaenge"
+        icon: mdi:poll
+        state: >
+          {% set v = states('sensor.ku_spuelmaschine_runs_month') %}
+          {{ 0 if v in ['unknown','unavailable','none'] else v | int(0) }}
+
+      - name: "KU SM Spuelgaenge Jahr"
+        unique_id: ku_spuelmaschine_runs_year_display
+        unit_of_measurement: "Spuelgaenge"
+        icon: mdi:poll
+        state: >
+          {% set v = states('sensor.ku_spuelmaschine_runs_year') %}
+          {{ 0 if v in ['unknown','unavailable','none'] else v | int(0) }}
+
+
+#######################
+# Automationen
+#######################
+
+automation:
+
+  #############################################
+  # 1) Start-Erkennung Spuelgang
+  #############################################
+  - id: ku_spuelmaschine_start
+    alias: KU - Spuelmaschine Start erkannt
+    description: >
+      Erkennt Spuelgang-Start ueber konfigurierbaren Schwellenwert.
+      Speichert Startstand kWh und Startzeit, startet Watchdog.
+    mode: restart
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.ku_spuelmaschine_leistung
+        above: input_number.ku_spuelmaschine_start_schwelle
+        for: "00:02:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ku_spuelmaschine_running
+        state: "off"
+    action:
+      # Running-Flag setzen
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.ku_spuelmaschine_running
+
+      # Startstand kWh merken
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ku_spuelmaschine_last_cycle_start_kwh
+        data:
+          value: >
+            {{ states('sensor.ku_spuelmaschine_summe_verbraucht') | float(0) }}
+
+      # Startzeit merken (Punkt 2)
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.ku_spuelmaschine_start_zeit
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+      # Watchdog-Timer starten (Punkt 6)
+      - service: timer.start
+        target:
+          entity_id: timer.ku_spuelmaschine_watchdog
+
+
+  #############################################
+  # 2) Ende-Erkennung + Benachrichtigungen
+  #############################################
+  - id: ku_spuelmaschine_fertig
+    alias: KU - Spuelmaschine fertig
+    description: >
+      Erkennt Spuelgang-Ende, berechnet Verbrauch, Kosten und Dauer,
+      vergleicht mit Durchschnitt und sendet Benachrichtigungen.
+    mode: restart
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.ku_spuelmaschine_leistung
+        below: input_number.ku_spuelmaschine_ende_schwelle
+        for: "00:10:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ku_spuelmaschine_running
+        state: "on"
+    action:
+      # -- Schritt 1: Rohdaten sammeln --
+      - variables:
+          start_kwh: "{{ states('input_number.ku_spuelmaschine_last_cycle_start_kwh') | float(0) }}"
+          end_kwh: "{{ states('sensor.ku_spuelmaschine_summe_verbraucht') | float(0) }}"
+          strompreis: "{{ states('sensor.globaler_strompreis_aktuell') | float(0.30) }}"
+          start_zeit: "{{ states('input_datetime.ku_spuelmaschine_start_zeit') }}"
+          avg_kwh_year: "{{ states('sensor.ku_spuelmaschine_kwh_year') | float(0) }}"
+          runs_year: "{{ states('sensor.ku_spuelmaschine_runs_year') | float(0) }}"
+
+      # -- Schritt 2: Berechnungen --
+      - variables:
+          verbrauch_kwh: >
+            {% set diff = (end_kwh | float(0)) - (start_kwh | float(0)) %}
+            {{ (diff if diff >= 0 else 0) | round(2) }}
+          dauer_min: >
+            {% if start_zeit not in ['unknown','unavailable','none'] %}
+              {{ ((as_timestamp(now()) - as_timestamp(start_zeit)) / 60) | round(0) }}
+            {% else %}
+              0
+            {% endif %}
+          kosten_euro: >
+            {% set diff = (end_kwh | float(0)) - (start_kwh | float(0)) %}
+            {% set kwh = diff if diff >= 0 else 0 %}
+            {{ (kwh * (strompreis | float(0.30))) | round(2) }}
+          durchschnitt_kwh: >
+            {% if (runs_year | float(0)) > 0 %}
+              {{ ((avg_kwh_year | float(0)) / (runs_year | float(1))) | round(2) }}
+            {% else %}
+              0
+            {% endif %}
+
+      # -- Schritt 3: Texte formatieren --
+      - variables:
+          dauer_text: >
+            {% set m = dauer_min | int(0) %}
+            {% if m >= 60 %}
+              {{ (m // 60) }}h {{ (m % 60) }}min
+            {% else %}
+              {{ m }}min
+            {% endif %}
+          vergleich_text: >
+            {% set avg = durchschnitt_kwh | float(0) %}
+            {% set vkwh = verbrauch_kwh | float(0) %}
+            {% if avg > 0 and vkwh > 0 %}
+              {% set diff_pct = ((vkwh - avg) / avg * 100) | round(0) %}
+              {% if diff_pct > 5 %}
+                {{ diff_pct }}% ueber Durchschnitt ({{ avg }} kWh)
+              {% elif diff_pct < -5 %}
+                {{ diff_pct | abs }}% unter Durchschnitt ({{ avg }} kWh)
+              {% else %}
+                im Durchschnitt ({{ avg }} kWh)
+              {% endif %}
+            {% else %}
+              noch kein Vergleich moeglich
+            {% endif %}
+
+      # -- Werte speichern --
+
+      # Verbrauch speichern
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ku_spuelmaschine_last_cycle_kwh
+        data:
+          value: "{{ verbrauch_kwh }}"
+
+      # Laufzeit speichern (Punkt 2)
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ku_spuelmaschine_last_cycle_minutes
+        data:
+          value: "{{ dauer_min | int(0) }}"
+
+      # Lauf hochzaehlen
+      - service: counter.increment
+        target:
+          entity_id: counter.ku_spuelmaschine_runs_total
+
+      # Running-Flag zuruecksetzen
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.ku_spuelmaschine_running
+
+      # Watchdog stoppen (Punkt 6)
+      - service: timer.cancel
+        target:
+          entity_id: timer.ku_spuelmaschine_watchdog
+
+      # -- Benachrichtigungen (Punkt 8) --
+
+      # Push an Oliver
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Spuelmaschine fertig!"
+          message: >
+            Dauer: {{ dauer_text }}
+            Verbrauch: {{ verbrauch_kwh }} kWh
+            Kosten: ca. {{ kosten_euro }} EUR
+            {{ vergleich_text }}
+          data:
+            tag: ku_spuelmaschine_fertig
+
+      # Push an Weini
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "Spuelmaschine fertig!"
+          message: >
+            Dauer: {{ dauer_text }}
+            Verbrauch: {{ verbrauch_kwh }} kWh
+            Kosten: ca. {{ kosten_euro }} EUR
+            {{ vergleich_text }}
+          data:
+            tag: ku_spuelmaschine_fertig
+
+      # HA Notification
+      - service: persistent_notification.create
+        data:
+          title: "KU - Spuelmaschine fertig"
+          message: >
+            Dauer: {{ dauer_text }}
+            Verbrauch: {{ verbrauch_kwh }} kWh
+            Kosten: ca. {{ kosten_euro }} EUR
+            {{ vergleich_text }}
+          notification_id: ku_spuelmaschine_fertig
+
+
+  #############################################
+  # 3) Watchdog - Sicherheits-Reset (Punkt 6)
+  #############################################
+  - id: ku_spuelmaschine_watchdog_reset
+    alias: KU - Spuelmaschine Watchdog Reset
+    description: >
+      Setzt den Lauf-Status nach 6 Stunden automatisch zurueck.
+      Schuetzt vor "haengendem" Status bei Sensorausfall.
+    mode: single
+    trigger:
+      - platform: event
+        event_type: timer.finished
+        event_data:
+          entity_id: timer.ku_spuelmaschine_watchdog
+    condition:
+      - condition: state
+        entity_id: input_boolean.ku_spuelmaschine_running
+        state: "on"
+    action:
+      # Running-Flag zuruecksetzen
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.ku_spuelmaschine_running
+
+      # Warnung an Oliver
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "Spuelmaschine Watchdog"
+          message: >
+            Der Spuelgang wurde nach 6 Stunden automatisch
+            als beendet markiert.
+            Moegliche Ursache: Sensorausfall oder untypisch
+            langer Spuelgang. Bitte pruefen.
+          data:
+            tag: ku_spuelmaschine_watchdog
+
+      # HA Notification
+      - service: persistent_notification.create
+        data:
+          title: "KU - Spuelmaschine Watchdog"
+          message: >
+            Der Spuelgang wurde nach 6 Stunden automatisch
+            als beendet markiert.
+            Moegliche Ursache: Sensorausfall oder untypisch
+            langer Spuelgang.
+          notification_id: ku_spuelmaschine_watchdog
+
+
+  #############################################
+  # 4) Nachtabschaltung - Steckdose AUS (Punkt 9)
+  #############################################
+  - id: ku_spuelmaschine_nacht_aus
+    alias: KU - Spuelmaschine Nacht AUS
+    description: >
+      Schaltet die Steckdose aus, wenn das Nacht-Zeitfenster beginnt.
+      Nur wenn kein Spuelgang laeuft und Nachtabschaltung aktiv ist.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.ku_sm_nachtzeit_aktiv
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ku_spuelmaschine_nacht_aktiv
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.ku_spuelmaschine_running
+        state: "off"
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.ku_spuelmaschine
+
+
+  #############################################
+  # 5) Nachtabschaltung - Steckdose EIN (Punkt 9)
+  #############################################
+  - id: ku_spuelmaschine_nacht_ein
+    alias: KU - Spuelmaschine Nacht EIN
+    description: >
+      Schaltet die Steckdose wieder ein, wenn das Nacht-Zeitfenster endet.
+      Nur wenn Nachtabschaltung aktiv ist.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.ku_sm_nachtzeit_aktiv
+        to: "off"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ku_spuelmaschine_nacht_aktiv
+        state: "on"
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.ku_spuelmaschine
+
+
+  #############################################
+  # 6) Nachtabschaltung - Spuelgang endet in Nacht (Punkt 9)
+  #############################################
+  - id: ku_spuelmaschine_nacht_nach_spuelgang
+    alias: KU - Spuelmaschine Nacht nach Spuelgang AUS
+    description: >
+      Wenn ein Spuelgang waehrend der Nachtzeit endet,
+      wird die Steckdose danach ausgeschaltet.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: input_boolean.ku_spuelmaschine_running
+        from: "on"
+        to: "off"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ku_spuelmaschine_nacht_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ku_sm_nachtzeit_aktiv
+        state: "on"
+    action:
+      # Kurz warten, damit die Fertig-Notification noch rausgeht
+      - delay:
+          seconds: 30
+      - service: switch.turn_off
+        target:
+          entity_id: switch.ku_spuelmaschine
+
+
+  #############################################
+  # 7) Neuer Spuelgang -> alte Benachrichtigungen loeschen
+  #############################################
+  - id: ku_spuelmaschine_dismiss
+    alias: KU - Spuelmaschine Benachrichtigungen loeschen
+    description: >
+      Wenn ein neuer Spuelgang startet, die alten Fertig- und
+      Watchdog-Benachrichtigungen loeschen.
+    trigger:
+      - platform: state
+        entity_id: input_boolean.ku_spuelmaschine_running
+        to: "on"
+    condition: []
+    action:
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: ku_spuelmaschine_fertig
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: ku_spuelmaschine_watchdog
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          message: clear_notification
+          data:
+            tag: ku_spuelmaschine_fertig
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          message: clear_notification
+          data:
+            tag: ku_spuelmaschine_watchdog
+      - service: notify.mobile_app_iphone_weini
+        data:
+          message: clear_notification
+          data:
+            tag: ku_spuelmaschine_fertig
+      - service: notify.mobile_app_iphone_weini
+        data:
+          message: clear_notification
+          data:
+            tag: ku_spuelmaschine_watchdog
+    mode: single

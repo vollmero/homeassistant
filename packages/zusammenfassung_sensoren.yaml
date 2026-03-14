@@ -1,0 +1,321 @@
+# ==============================================================================
+# PACKAGE: Zusammenfassungs-Sensoren (fuer Bubble Cards)
+#
+# 3 Template-Sensoren:
+# - sensor.zs_lichter_an
+# - sensor.zs_thermostate_heizen
+# - sensor.zs_fenster_offen
+#
+# EINBAU: In packages/ ablegen, HA Config pruefen + Neustart.
+# ==============================================================================
+
+template:
+  - sensor:
+
+      # ========================================================================
+      # Aktive Lichter
+      # ========================================================================
+      - name: ZS - Lichter an
+        unique_id: zs_dashboard_lichter_an
+        icon: >
+          {% set lampen = [
+            'light.az_hangelampe_01',
+            'light.az_schreibtischbeleuchtung_01',
+            'light.az_stehlampe_01',
+            'light.bz_deckenstrahlergruppe_01',
+            'light.wz_hangelampe_01',
+            'light.wz_kommodenlicht_01',
+            'light.wz_sofalicht_01',
+            'light.wz_stehlampe_01',
+            'light.wz_stehlampe_02',
+            'light.ku_deckenlampe_1',
+            'light.ki_deckenlampe_01',
+            'light.ki_hohlenlicht',
+            'light.sz_deckenlampe_01',
+            'light.sz_deckenlampe_02',
+            'light.sz_deckenlampe_03',
+            'light.sz_tischlampe_01',
+            'light.wandstrahler_loggia',
+            'light.ez_wandstrahler'
+          ] %}
+          {% set an = lampen | select('is_state', 'on') | list | count %}
+          {{ 'mdi:lightbulb-on' if an > 0 else 'mdi:lightbulb-off-outline' }}
+        unit_of_measurement: ""
+        state: >
+          {% set lampen = [
+            'light.az_hangelampe_01',
+            'light.az_schreibtischbeleuchtung_01',
+            'light.az_stehlampe_01',
+            'light.bz_deckenstrahlergruppe_01',
+            'light.wz_hangelampe_01',
+            'light.wz_kommodenlicht_01',
+            'light.wz_sofalicht_01',
+            'light.wz_stehlampe_01',
+            'light.wz_stehlampe_02',
+            'light.ku_deckenlampe_1',
+            'light.ki_deckenlampe_01',
+            'light.ki_hohlenlicht',
+            'light.sz_deckenlampe_01',
+            'light.sz_deckenlampe_02',
+            'light.sz_deckenlampe_03',
+            'light.sz_tischlampe_01',
+            'light.wandstrahler_loggia',
+            'light.ez_wandstrahler'
+          ] %}
+          {{ lampen | select('is_state', 'on') | list | count }}
+        attributes:
+          details: >
+            {% set lampen = {
+              'AZ Haengelampe': 'light.az_hangelampe_01',
+              'AZ Schreibtisch': 'light.az_schreibtischbeleuchtung_01',
+              'AZ Stehlampe': 'light.az_stehlampe_01',
+              'BZ Deckenstrahler': 'light.bz_deckenstrahlergruppe_01',
+              'WZ Haengelampe': 'light.wz_hangelampe_01',
+              'WZ TV-Licht': 'light.wz_kommodenlicht_01',
+              'WZ Sofalicht': 'light.wz_sofalicht_01',
+              'WZ Stehlampe 1': 'light.wz_stehlampe_01',
+              'WZ Stehlampe 2': 'light.wz_stehlampe_02',
+              'KU Deckenlampe': 'light.ku_deckenlampe_1',
+              'KI Deckenlampe': 'light.ki_deckenlampe_01',
+              'KI Hoehlenlicht': 'light.ki_hohlenlicht',
+              'SZ Decke 1': 'light.sz_deckenlampe_01',
+              'SZ Decke 2': 'light.sz_deckenlampe_02',
+              'SZ Decke 3': 'light.sz_deckenlampe_03',
+              'SZ Tischlampe': 'light.sz_tischlampe_01',
+              'KU Wandstrahler': 'light.wandstrahler_loggia',
+              'KU Wandstrahler 2': 'light.ez_wandstrahler'
+            } %}
+            {% set ns = namespace(an=[]) %}
+            {% for name, entity in lampen.items() %}
+              {% if is_state(entity, 'on') %}
+                {% set ns.an = ns.an + [name] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.an | join(', ') if ns.an | count > 0 else 'Keine' }}
+
+      # ========================================================================
+      # Heizende Thermostate
+      # Gruppen fuer WZ und KI, Einzel-Entities fuer den Rest
+      # ========================================================================
+      - name: ZS - Thermostate heizen
+        unique_id: zs_dashboard_thermostate_heizen
+        icon: >
+          {% set th = [
+            'climate.az_heizung_01',
+            'climate.bz_heizung_01',
+            'climate.wz_heizungsgruppe_01',
+            'climate.ku_heizung_01',
+            'climate.ki_heizungsgruppe_01',
+            'climate.sz_heizung_01'
+          ] %}
+          {% set an = th | select('is_state', 'heat') | list | count %}
+          {{ 'mdi:radiator' if an > 0 else 'mdi:radiator-off' }}
+        unit_of_measurement: ""
+        state: >
+          {% set th = [
+            'climate.az_heizung_01',
+            'climate.bz_heizung_01',
+            'climate.wz_heizungsgruppe_01',
+            'climate.ku_heizung_01',
+            'climate.ki_heizungsgruppe_01',
+            'climate.sz_heizung_01'
+          ] %}
+          {{ th | select('is_state', 'heat') | list | count }}
+        attributes:
+          details: >
+            {% set th = {
+              'AZ': 'climate.az_heizung_01',
+              'BZ': 'climate.bz_heizung_01',
+              'WZ': 'climate.wz_heizungsgruppe_01',
+              'KU': 'climate.ku_heizung_01',
+              'KI': 'climate.ki_heizungsgruppe_01',
+              'SZ': 'climate.sz_heizung_01'
+            } %}
+            {% set ns = namespace(heizen=[]) %}
+            {% for name, entity in th.items() %}
+              {% if is_state(entity, 'heat') %}
+                {% set ns.heizen = ns.heizen + [name] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.heizen | join(', ') if ns.heizen | count > 0 else 'Keine' }}
+
+      # ========================================================================
+      # Offene Fenster
+      # Gruppen fuer WZ, KU, KI, Einzel-Entities fuer AZ, BZ, SZ
+      # ========================================================================
+      - name: ZS - Fenster offen
+        unique_id: zs_dashboard_fenster_offen
+        icon: >
+          {% set fenster = [
+            'binary_sensor.az_fenster_01_offnung',
+            'binary_sensor.bz_fenster_01',
+            'binary_sensor.wz_fenstergruppe_01',
+            'binary_sensor.ku_fenstergruppe_01',
+            'binary_sensor.ki_fenstergruppe_01',
+            'binary_sensor.sz_fenster_01'
+          ] %}
+          {% set offen = fenster | select('is_state', 'on') | list | count %}
+          {{ 'mdi:window-open-variant' if offen > 0 else 'mdi:window-closed-variant' }}
+        unit_of_measurement: ""
+        state: >
+          {% set fenster = [
+            'binary_sensor.az_fenster_01_offnung',
+            'binary_sensor.bz_fenster_01',
+            'binary_sensor.wz_fenstergruppe_01',
+            'binary_sensor.ku_fenstergruppe_01',
+            'binary_sensor.ki_fenstergruppe_01',
+            'binary_sensor.sz_fenster_01'
+          ] %}
+          {{ fenster | select('is_state', 'on') | list | count }}
+        attributes:
+          details: >
+            {% set fenster = {
+              'AZ': 'binary_sensor.az_fenster_01_offnung',
+              'BZ': 'binary_sensor.bz_fenster_01',
+              'WZ': 'binary_sensor.wz_fenstergruppe_01',
+              'KU': 'binary_sensor.ku_fenstergruppe_01',
+              'KI': 'binary_sensor.ki_fenstergruppe_01',
+              'SZ': 'binary_sensor.sz_fenster_01'
+            } %}
+            {% set ns = namespace(offen=[]) %}
+            {% for name, entity in fenster.items() %}
+              {% if is_state(entity, 'on') %}
+                {% set ns.offen = ns.offen + [name] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.offen | join(', ') if ns.offen | count > 0 else 'Alle zu' }}
+
+      # ========================================================================
+      # Alle Geräte Status (Studio Gear + Haushaltsgeräte)
+      # Text-Zusammenfassung für Bubble Card
+      # ========================================================================
+      - name: "Geräte Status"
+        unique_id: geraete_status
+        state: >
+          {% set geraete = [
+            'light.az_drm1', 'light.az_eurorack',
+            'switch.az_h90', 'switch.az_pedal_02',
+            'light.az_ssl', 'light.az_vitalizer',
+            'switch.meris_lvx', 'light.az_studiomonitorgruppe',
+            'switch.bz_waschmaschine_01', 'switch.ku_spuelmaschine'
+          ] %}
+          {% set an = geraete | select('is_state', 'on') | list | count %}
+          {% if an == 0 %}Keine Geräte aktiv
+          {% elif an == 1 %}1 Gerät aktiv
+          {% else %}{{ an }} Geräte aktiv
+          {% endif %}
+        attributes:
+          aktive_geraete: >
+            {% set geraete = {
+              'DRM1': 'light.az_drm1',
+              'Eurorack': 'light.az_eurorack',
+              'H90': 'switch.az_h90',
+              'Pedal': 'switch.az_pedal_02',
+              'SSL': 'light.az_ssl',
+              'Vitalizer': 'light.az_vitalizer',
+              'Meris LVX': 'switch.meris_lvx',
+              'Monitore': 'light.az_studiomonitorgruppe',
+              'Waschmaschine': 'switch.bz_waschmaschine_01',
+              'Spülmaschine': 'switch.ku_spuelmaschine'
+            } %}
+            {% set ns = namespace(an=[]) %}
+            {% for name, entity in geraete.items() %}
+              {% if is_state(entity, 'on') %}
+                {% set ns.an = ns.an + [name] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.an | join(', ') if ns.an | count > 0 else '' }}
+          anzahl_aktiv: >
+            {% set geraete = [
+              'light.az_drm1', 'light.az_eurorack',
+              'switch.az_h90', 'switch.az_pedal_02',
+              'light.az_ssl', 'light.az_vitalizer',
+              'switch.meris_lvx', 'light.az_studiomonitorgruppe',
+              'switch.bz_waschmaschine_01', 'switch.ku_spuelmaschine'
+            ] %}
+            {{ geraete | select('is_state', 'on') | list | count }}
+
+      # ========================================================================
+      # Lampen Status (Text-Zusammenfassung)
+      # ========================================================================
+      - name: "Lampen Status"
+        unique_id: lampen_status
+        state: >
+          {% set lampen = [
+            'light.az_hangelampe_01', 'light.az_schreibtischbeleuchtung_01',
+            'light.az_stehlampe_01', 'light.bz_deckenstrahlergruppe_01',
+            'light.wz_hangelampe_01', 'light.wz_kommodenlicht_01',
+            'light.wz_sofalicht_01', 'light.wz_stehlampe_01',
+            'light.wz_stehlampe_02', 'light.ku_deckenlampe_1',
+            'light.ki_deckenlampe_01', 'light.ki_hohlenlicht',
+            'light.sz_deckenlampe_01', 'light.sz_deckenlampe_02',
+            'light.sz_deckenlampe_03', 'light.sz_tischlampe_01',
+            'light.wandstrahler_loggia', 'light.ez_wandstrahler'
+          ] %}
+          {% set an = lampen | select('is_state', 'on') | list | count %}
+          {% if an == 0 %}Keine Lampen aktiv
+          {% elif an == 1 %}1 Lampe aktiv
+          {% else %}{{ an }} Lampen aktiv
+          {% endif %}
+        attributes:
+          anzahl_aktiv: >
+            {% set lampen = [
+              'light.az_hangelampe_01', 'light.az_schreibtischbeleuchtung_01',
+              'light.az_stehlampe_01', 'light.bz_deckenstrahlergruppe_01',
+              'light.wz_hangelampe_01', 'light.wz_kommodenlicht_01',
+              'light.wz_sofalicht_01', 'light.wz_stehlampe_01',
+              'light.wz_stehlampe_02', 'light.ku_deckenlampe_1',
+              'light.ki_deckenlampe_01', 'light.ki_hohlenlicht',
+              'light.sz_deckenlampe_01', 'light.sz_deckenlampe_02',
+              'light.sz_deckenlampe_03', 'light.sz_tischlampe_01',
+              'light.wandstrahler_loggia', 'light.ez_wandstrahler'
+            ] %}
+            {{ lampen | select('is_state', 'on') | list | count }}
+
+      # ========================================================================
+      # Heizung Zusammenfassung (Text-Status)
+      # ========================================================================
+      - name: "Heizung Status Text"
+        unique_id: heizung_status_text
+        state: >
+          {% set th = [
+            'climate.az_heizung_01', 'climate.bz_heizung_01',
+            'climate.wz_heizungsgruppe_01', 'climate.ku_heizung_01',
+            'climate.ki_heizungsgruppe_01', 'climate.sz_heizung_01'
+          ] %}
+          {% set an = th | select('is_state', 'heat') | list | count %}
+          {% if an == 0 %}Keine Thermostate heizen
+          {% elif an == 1 %}1 Thermostat heizt
+          {% else %}{{ an }} Thermostate heizen{% endif %}
+        attributes:
+          raeume: >
+            {% set th = {
+              'AZ': 'climate.az_heizung_01',
+              'BZ': 'climate.bz_heizung_01',
+              'WZ': 'climate.wz_heizungsgruppe_01',
+              'KU': 'climate.ku_heizung_01',
+              'KI': 'climate.ki_heizungsgruppe_01',
+              'SZ': 'climate.sz_heizung_01'
+            } %}
+            {% set ns = namespace(heizen=[]) %}
+            {% for name, entity in th.items() %}
+              {% if is_state(entity, 'heat') %}
+                {% set ns.heizen = ns.heizen + [name] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.heizen | join(', ') if ns.heizen | count > 0 else 'Keine' }}
+          anzahl: >
+            {% set th = [
+              'climate.az_heizung_01', 'climate.bz_heizung_01',
+              'climate.wz_heizungsgruppe_01', 'climate.ku_heizung_01',
+              'climate.ki_heizungsgruppe_01', 'climate.sz_heizung_01'
+            ] %}
+            {{ th | select('is_state', 'heat') | list | count }}
+        icon: >
+          {% set th = [
+            'climate.az_heizung_01', 'climate.bz_heizung_01',
+            'climate.wz_heizungsgruppe_01', 'climate.ku_heizung_01',
+            'climate.ki_heizungsgruppe_01', 'climate.sz_heizung_01'
+          ] %}
+          {% set an = th | select('is_state', 'heat') | list | count %}
+          {{ 'mdi:radiator' if an > 0 else 'mdi:radiator-off' }}

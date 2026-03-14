@@ -1,0 +1,263 @@
+# ==============================================================================
+# PACKAGE: Studio Gear - Template Switches (moderne Syntax)
+#
+# ZWECK:
+# Die Studio-Geraete sind ueber smarte Steckdosen angebunden, die in HA
+# als light.* registriert sind. Da es sich nicht um Lampen handelt,
+# werden sie hier als switch.* bereitgestellt.
+#
+# NACH INSTALLATION:
+# 1. Die alten light.* Entities in HA ausblenden:
+#    Einstellungen -> Geraete & Dienste -> Entitaeten -> Entity waehlen
+#    -> Zahnrad -> "Aktiviert" ausschalten (oder "Versteckt" aktivieren)
+# 2. In Dashboards/Automationen die neuen switch.* IDs verwenden
+# 3. Optional: Den alten Entities das Label "no_dboard" geben,
+#    damit sie im Strategy-Dashboard nicht auftauchen
+#
+# ENTITIES:
+# switch.az_drm1              <- light.az_drm1
+# switch.az_eurorack          <- light.az_eurorack
+# switch.az_ssl               <- light.az_ssl
+# switch.az_vitalizer         <- light.az_vitalizer
+# switch.az_studiomonitore    <- light.az_studiomonitorgruppe
+# ==============================================================================
+
+template:
+  - switch:
+
+      # ========================================================================
+      # DRM1
+      # ========================================================================
+      - name: "AZ DRM1"
+        unique_id: az_drm1_switch
+        icon: mdi:audio-video
+        state: "{{ is_state('light.az_drm1', 'on') }}"
+        availability: "{{ not is_state('light.az_drm1', 'unavailable') }}"
+        turn_on:
+          - action: light.turn_on
+            target:
+              entity_id: light.az_drm1
+        turn_off:
+          - action: light.turn_off
+            target:
+              entity_id: light.az_drm1
+
+      # ========================================================================
+      # Eurorack
+      # ========================================================================
+      - name: "AZ Eurorack"
+        unique_id: az_eurorack_switch
+        icon: mdi:audio-video
+        state: "{{ is_state('light.az_eurorack', 'on') }}"
+        availability: "{{ not is_state('light.az_eurorack', 'unavailable') }}"
+        turn_on:
+          - action: light.turn_on
+            target:
+              entity_id: light.az_eurorack
+        turn_off:
+          - action: light.turn_off
+            target:
+              entity_id: light.az_eurorack
+
+      # ========================================================================
+      # SSL
+      # ========================================================================
+      - name: "AZ SSL"
+        unique_id: az_ssl_switch
+        icon: mdi:knob
+        state: "{{ is_state('light.az_ssl', 'on') }}"
+        availability: "{{ not is_state('light.az_ssl', 'unavailable') }}"
+        turn_on:
+          - action: light.turn_on
+            target:
+              entity_id: light.az_ssl
+        turn_off:
+          - action: light.turn_off
+            target:
+              entity_id: light.az_ssl
+
+      # ========================================================================
+      # Vitalizer
+      # ========================================================================
+      - name: "AZ Vitalizer"
+        unique_id: az_vitalizer_switch
+        icon: mdi:knob
+        state: "{{ is_state('light.az_vitalizer', 'on') }}"
+        availability: "{{ not is_state('light.az_vitalizer', 'unavailable') }}"
+        turn_on:
+          - action: light.turn_on
+            target:
+              entity_id: light.az_vitalizer
+        turn_off:
+          - action: light.turn_off
+            target:
+              entity_id: light.az_vitalizer
+
+      # ========================================================================
+      # Studiomonitore
+      # ========================================================================
+      - name: "AZ Studiomonitore"
+        unique_id: az_studiomonitore_switch
+        icon: mdi:speaker-multiple
+        state: "{{ is_state('light.az_studiomonitorgruppe', 'on') }}"
+        availability: "{{ not is_state('light.az_studiomonitorgruppe', 'unavailable') }}"
+        turn_on:
+          - action: light.turn_on
+            target:
+              entity_id: light.az_studiomonitorgruppe
+        turn_off:
+          - action: light.turn_off
+            target:
+              entity_id: light.az_studiomonitorgruppe
+
+  - sensor:
+
+      # ========================================================================
+      # Studio Gear Zusammenfassung
+      # ========================================================================
+      - name: "AZ Studio Gear Status"
+        unique_id: az_studio_gear_status
+        state: >
+          {% set geraete = [
+            'light.az_drm1', 'light.az_eurorack',
+            'switch.az_h90', 'switch.az_pedal_02',
+            'light.az_ssl', 'light.az_vitalizer',
+            'switch.meris_lvx', 'light.az_studiomonitorgruppe'
+          ] %}
+          {% set an = geraete | select('is_state', 'on') | list | count %}
+          {% if an == 0 %}Keine Geräte aktiv
+          {% elif an == 1 %}1 Gerät aktiv
+          {% else %}{{ an }} Geräte aktiv
+          {% endif %}
+        attributes:
+          aktive_geraete: >
+            {% set geraete = {
+              'DRM1': 'light.az_drm1',
+              'Eurorack': 'light.az_eurorack',
+              'H90': 'switch.az_h90',
+              'Pedal': 'switch.az_pedal_02',
+              'SSL': 'light.az_ssl',
+              'Vitalizer': 'light.az_vitalizer',
+              'Meris LVX': 'switch.meris_lvx',
+              'Monitore': 'light.az_studiomonitorgruppe'
+            } %}
+            {% set ns = namespace(an=[]) %}
+            {% for name, entity in geraete.items() %}
+              {% if is_state(entity, 'on') %}
+                {% set ns.an = ns.an + [name] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.an | join(', ') if ns.an | count > 0 else '' }}
+          anzahl_aktiv: >
+            {% set geraete = [
+              'light.az_drm1', 'light.az_eurorack',
+              'switch.az_h90', 'switch.az_pedal_02',
+              'light.az_ssl', 'light.az_vitalizer',
+              'switch.meris_lvx', 'light.az_studiomonitorgruppe'
+            ] %}
+            {{ geraete | select('is_state', 'on') | list | count }}
+            
+# ==============================================================================
+# ERGAENZUNG fuer az_studio_gear.yaml
+# Einfuegen am Ende der Datei (nach dem template: Block)
+# ==============================================================================
+
+script:
+
+  # ==========================================================================
+  # Studio Session Toggle (alle 7 Produktionsgeraete)
+  # Studiomonitore bewusst ausgenommen
+  # ==========================================================================
+  az_studio_session_toggle:
+    alias: "Studio Session Toggle"
+    description: >
+      Schaltet alle 7 Studio-Produktionsgeraete ein oder aus.
+      Wenn alle an sind, werden alle ausgeschaltet.
+      Wenn mindestens eines aus ist, werden alle eingeschaltet.
+    icon: mdi:music
+    mode: single
+    sequence:
+      - choose:
+          - alias: "Alle an - alles ausschalten"
+            conditions:
+              - condition: state
+                entity_id: switch.az_drm1
+                state: "on"
+              - condition: state
+                entity_id: switch.az_eurorack
+                state: "on"
+              - condition: state
+                entity_id: switch.az_pedal_02
+                state: "on"
+              - condition: state
+                entity_id: switch.meris_lvx
+                state: "on"
+              - condition: state
+                entity_id: switch.az_h90
+                state: "on"
+              - condition: state
+                entity_id: switch.az_ssl
+                state: "on"
+              - condition: state
+                entity_id: switch.az_vitalizer
+                state: "on"
+            sequence:
+              - action: switch.turn_off
+                target:
+                  entity_id:
+                    - switch.az_drm1
+                    - switch.az_eurorack
+                    - switch.az_pedal_02
+                    - switch.meris_lvx
+                    - switch.az_h90
+                    - switch.az_ssl
+                    - switch.az_vitalizer
+        default:
+          - action: switch.turn_on
+            target:
+              entity_id:
+                - switch.az_drm1
+                - switch.az_eurorack
+                - switch.az_pedal_02
+                - switch.meris_lvx
+                - switch.az_h90
+                - switch.az_ssl
+                - switch.az_vitalizer
+
+  # ==========================================================================
+  # Studio Synths Toggle (H90 + LVX + Mercury X)
+  # ==========================================================================
+  az_studio_synths_toggle:
+    alias: "Studio Synths Toggle"
+    description: >
+      Schaltet die drei Effektpedale (Eventide H90, Meris LVX, Meris Mercury X)
+      gemeinsam ein oder aus.
+    icon: mdi:waveform
+    mode: single
+    sequence:
+      - choose:
+          - alias: "Alle an - alles ausschalten"
+            conditions:
+              - condition: state
+                entity_id: switch.az_h90
+                state: "on"
+              - condition: state
+                entity_id: switch.meris_lvx
+                state: "on"
+              - condition: state
+                entity_id: switch.az_pedal_02
+                state: "on"
+            sequence:
+              - action: switch.turn_off
+                target:
+                  entity_id:
+                    - switch.az_h90
+                    - switch.meris_lvx
+                    - switch.az_pedal_02
+        default:
+          - action: switch.turn_on
+            target:
+              entity_id:
+                - switch.az_h90
+                - switch.meris_lvx
+                - switch.az_pedal_02

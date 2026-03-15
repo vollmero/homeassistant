@@ -1,6 +1,13 @@
+# Alles ignorieren
 *
+
+# Erlaubte Dateien
 !.gitignore
+!README.md
+!filelist.txt
+!configuration.yaml
 !packages/
 !packages/**/*.yaml
-!configuration.yaml
+
+# Secrets NIE tracken
 secrets.yaml

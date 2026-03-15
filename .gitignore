@@ -1,0 +1,6 @@
+*
+!.gitignore
+!packages/
+!packages/**/*.yaml
+!configuration.yaml
+secrets.yaml

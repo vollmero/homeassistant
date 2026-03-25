@@ -1,0 +1,247 @@
+#############################################
+# Paket: Polestar 4 (V1.0)
+#
+# Integration: Polestar (HACS)
+# Device:      Polestar 6877
+#
+# Enthält:
+# 1. Template-Sensoren für aufbereitete Werte
+# 2. Ladestart-/Ladefertig-Benachrichtigungen
+# 3. Niedrige-Batterie-Warnung
+# 4. Service-Erinnerung
+#
+# Notify:    notify.mobile_app_iphone_15_pro_max_von_oliver
+#            notify.mobile_app_iphone_weini
+#############################################
+
+
+#######################
+# Helfer
+#######################
+
+input_number:
+  polestar_batterie_warnung_schwelle:
+    name: Polestar – Batteriewarnung Schwelle
+    min: 5
+    max: 50
+    step: 5
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:battery-alert
+
+input_boolean:
+  polestar_benachrichtigungen:
+    name: Polestar – Benachrichtigungen aktiv
+    icon: mdi:bell-ring
+
+
+#######################
+# Template-Sensoren
+#######################
+
+template:
+
+  - binary_sensor:
+      #############################################
+      # Polestar lädt gerade
+      #############################################
+      - name: "Polestar – Ladevorgang aktiv"
+        unique_id: polestar_charging_active
+        device_class: battery_charging
+        icon: >
+          {% if is_state('binary_sensor.polestar_charging_active', 'on') %}
+            mdi:battery-charging
+          {% else %}
+            mdi:battery
+          {% endif %}
+        state: >
+          {{ states('sensor.polestar_6877_charging_status') | lower
+             in ['charging', 'laden', 'charging_active',
+                  'charging_status_charging'] }}
+
+  - sensor:
+      #############################################
+      # Ladezeit formatiert (Stunden:Minuten)
+      #############################################
+      - name: "Polestar – Ladezeit formatiert"
+        unique_id: polestar_ladezeit_formatiert
+        icon: mdi:timer-outline
+        state: >
+          {% set mins = states('sensor.polestar_6877_estimated_charging_time_to_full') | int(0) %}
+          {% if mins > 0 %}
+            {{ '%d:%02d' | format(mins // 60, mins % 60) }} h
+          {% else %}
+            –
+          {% endif %}
+
+      #############################################
+      # Service-Countdown formatiert
+      #############################################
+      - name: "Polestar – Service in"
+        unique_id: polestar_service_countdown
+        icon: mdi:wrench-clock
+        state: >
+          {% set days = states('sensor.polestar_6877_days_to_service') | int(0) %}
+          {% set km = states('sensor.polestar_6877_distance_to_service') | int(0) %}
+          {% if days > 0 and km > 0 %}
+            {{ days }} Tage / {{ km }} km
+          {% elif days > 0 %}
+            {{ days }} Tage
+          {% else %}
+            –
+          {% endif %}
+
+
+#######################
+# Automationen
+#######################
+
+automation:
+
+  #############################################
+  # 1) Ladevorgang gestartet
+  #############################################
+  - id: polestar_ladevorgang_gestartet
+    alias: Polestar – Ladevorgang gestartet
+    description: >
+      Benachrichtigt wenn der Polestar ans Ladekabel
+      angeschlossen wird und der Ladevorgang beginnt.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.polestar_charging_active
+        from: "off"
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: input_boolean.polestar_benachrichtigungen
+        state: "on"
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "⚡ Polestar lädt"
+          message: >
+            🔋 Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}%
+            ⚡ Ladeleistung: {{ states('sensor.polestar_6877_charging_power') }} kW
+            ⏱ Geschätzte Ladezeit: {{ states('sensor.polestar_ladezeit_formatiert') }}
+            🎯 Reichweite bei voll: {{ states('sensor.polestar_6877_estimated_full_charge_range') }} km
+          data:
+            tag: polestar_laden
+            group: polestar
+
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "⚡ Polestar lädt"
+          message: >
+            🔋 Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}%
+            ⚡ Ladeleistung: {{ states('sensor.polestar_6877_charging_power') }} kW
+            ⏱ Geschätzte Ladezeit: {{ states('sensor.polestar_ladezeit_formatiert') }}
+          data:
+            tag: polestar_laden
+            group: polestar
+
+  #############################################
+  # 2) Ladevorgang beendet (voll)
+  #############################################
+  - id: polestar_ladevorgang_fertig
+    alias: Polestar – Ladevorgang beendet
+    description: >
+      Benachrichtigt wenn der Ladevorgang abgeschlossen ist.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.polestar_charging_active
+        from: "on"
+        to: "off"
+    condition:
+      - condition: state
+        entity_id: input_boolean.polestar_benachrichtigungen
+        state: "on"
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "✅ Polestar fertig geladen"
+          message: >
+            🔋 Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}%
+            🛣 Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
+            📏 Kilometerstand: {{ states('sensor.polestar_6877_current_odometer') | int(0) | string + ' km' }}
+          data:
+            tag: polestar_laden
+            group: polestar
+
+      - service: notify.mobile_app_iphone_weini
+        data:
+          title: "✅ Polestar fertig geladen"
+          message: >
+            🔋 Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}%
+            🛣 Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
+          data:
+            tag: polestar_laden
+            group: polestar
+
+      - service: persistent_notification.create
+        data:
+          title: "✅ Polestar – Ladevorgang beendet"
+          message: >
+            🔋 Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}%
+            🛣 Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
+          notification_id: polestar_laden
+
+  #############################################
+  # 3) Niedrige Batterie Warnung
+  #############################################
+  - id: polestar_batterie_niedrig
+    alias: Polestar – Batterie niedrig
+    description: >
+      Warnt wenn der Batteriestand unter die konfigurierte
+      Schwelle fällt und das Auto nicht lädt.
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.polestar_6877_battery_charge_level
+        below: input_number.polestar_batterie_warnung_schwelle
+    condition:
+      - condition: state
+        entity_id: input_boolean.polestar_benachrichtigungen
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.polestar_charging_active
+        state: "off"
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "🪫 Polestar Batterie niedrig"
+          message: >
+            🔋 Nur noch {{ states('sensor.polestar_6877_battery_charge_level') }}% Akku!
+            🛣 Restreichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
+          data:
+            tag: polestar_batterie_niedrig
+            group: polestar
+
+  #############################################
+  # 4) Service-Erinnerung (< 30 Tage)
+  #############################################
+  - id: polestar_service_erinnerung
+    alias: Polestar – Service Erinnerung
+    description: >
+      Einmalige Erinnerung wenn der nächste Service
+      in weniger als 30 Tagen fällig ist.
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.polestar_6877_days_to_service
+        below: 30
+    condition:
+      - condition: state
+        entity_id: input_boolean.polestar_benachrichtigungen
+        state: "on"
+    action:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "🔧 Polestar Service fällig"
+          message: >
+            📅 Noch {{ states('sensor.polestar_6877_days_to_service') }} Tage bis zum Service
+            📏 Kilometerstand: {{ states('sensor.polestar_6877_current_odometer') | int(0) | string + ' km' }}
+          data:
+            tag: polestar_service
+            group: polestar

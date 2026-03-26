@@ -138,13 +138,13 @@ script:
     sequence:
       - service: notify.mobile_app_iphone_15_pro_max_von_oliver
         data:
-          title: "🚗 Polestar Status"
+          title: "Polestar Status"
           message: >
-            🔋 Batterie: {{ states('sensor.polestar_6877_battery_charge_level') }}%
-            🛣 Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
-            📏 KM-Stand: {{ states('sensor.polestar_6877_current_odometer') | int(0) }} km
-            ⚡ Lädt: {{ 'Ja' if is_state('binary_sensor.polestar_charging_active', 'on') else 'Nein' }}
-            🔧 Service in: {{ states('sensor.polestar_service_in') }}
+            Batterie: {{ states('sensor.polestar_6877_battery_charge_level') }}% –
+            Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km –
+            KM-Stand: {{ states('sensor.polestar_6877_current_odometer') | int(0) }} km –
+            Lädt: {{ 'Ja' if is_state('binary_sensor.polestar_charging_active', 'on') else 'Nein' }} –
+            Service in: {{ states('sensor.polestar_service_in') }}
           data:
             tag: polestar_status
             group: polestar
@@ -177,23 +177,23 @@ automation:
     action:
       - service: notify.mobile_app_iphone_15_pro_max_von_oliver
         data:
-          title: "⚡ Polestar lädt"
+          title: "Polestar lädt"
           message: >
-            🔋 Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}%
-            ⚡ Ladeleistung: {{ states('sensor.polestar_6877_charging_power') }} kW
-            ⏱ Geschätzte Ladezeit: {{ states('sensor.polestar_ladezeit_formatiert') }}
-            🎯 Reichweite bei voll: {{ states('sensor.polestar_6877_estimated_full_charge_range') }} km
+            Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}% –
+            Ladeleistung: {{ states('sensor.polestar_6877_charging_power') }} kW –
+            Geschätzte Ladezeit: {{ states('sensor.polestar_ladezeit_formatiert') }} –
+            Reichweite bei voll: {{ states('sensor.polestar_6877_estimated_full_charge_range') }} km
           data:
             tag: polestar_laden
             group: polestar
 
       - service: notify.mobile_app_iphone_weini
         data:
-          title: "⚡ Polestar lädt"
+          title: "Polestar lädt"
           message: >
-            🔋 Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}%
-            ⚡ Ladeleistung: {{ states('sensor.polestar_6877_charging_power') }} kW
-            ⏱ Geschätzte Ladezeit: {{ states('sensor.polestar_ladezeit_formatiert') }}
+            Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}% –
+            Ladeleistung: {{ states('sensor.polestar_6877_charging_power') }} kW –
+            Geschätzte Ladezeit: {{ states('sensor.polestar_ladezeit_formatiert') }}
           data:
             tag: polestar_laden
             group: polestar
@@ -218,31 +218,31 @@ automation:
     action:
       - service: notify.mobile_app_iphone_15_pro_max_von_oliver
         data:
-          title: "✅ Polestar fertig geladen"
+          title: "Polestar fertig geladen"
           message: >
-            🔋 Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}%
-            🛣 Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
-            📏 Kilometerstand: {{ states('sensor.polestar_6877_current_odometer') | int(0) | string + ' km' }}
+            Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}% –
+            Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km –
+            Kilometerstand: {{ states('sensor.polestar_6877_current_odometer') | int(0) | string + ' km' }}
           data:
             tag: polestar_laden
             group: polestar
 
       - service: notify.mobile_app_iphone_weini
         data:
-          title: "✅ Polestar fertig geladen"
+          title: "Polestar fertig geladen"
           message: >
-            🔋 Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}%
-            🛣 Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
+            Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}% –
+            Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
           data:
             tag: polestar_laden
             group: polestar
 
       - service: persistent_notification.create
         data:
-          title: "✅ Polestar – Ladevorgang beendet"
+          title: "Polestar – Ladevorgang beendet"
           message: >
-            🔋 Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}%
-            🛣 Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
+            Batteriestand: {{ states('sensor.polestar_6877_battery_charge_level') }}% –
+            Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
           notification_id: polestar_laden
 
   #############################################
@@ -268,10 +268,10 @@ automation:
     action:
       - service: notify.mobile_app_iphone_15_pro_max_von_oliver
         data:
-          title: "🪫 Polestar Batterie niedrig"
+          title: "Polestar Batterie niedrig"
           message: >
-            🔋 Nur noch {{ states('sensor.polestar_6877_battery_charge_level') }}% Akku!
-            🛣 Restreichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
+            Nur noch {{ states('sensor.polestar_6877_battery_charge_level') }}% Akku –
+            Restreichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
           data:
             tag: polestar_batterie_niedrig
             group: polestar
@@ -296,10 +296,10 @@ automation:
     action:
       - service: notify.mobile_app_iphone_15_pro_max_von_oliver
         data:
-          title: "🔧 Polestar Service fällig"
+          title: "Polestar Service fällig"
           message: >
-            📅 Noch {{ states('sensor.polestar_6877_days_to_service') }} Tage bis zum Service
-            📏 Kilometerstand: {{ states('sensor.polestar_6877_current_odometer') | int(0) | string + ' km' }}
+            Noch {{ states('sensor.polestar_6877_days_to_service') }} Tage bis zum Service –
+            Kilometerstand: {{ states('sensor.polestar_6877_current_odometer') | int(0) | string + ' km' }}
           data:
             tag: polestar_service
             group: polestar

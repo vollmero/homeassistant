@@ -92,6 +92,64 @@ template:
           {% endif %}
 
 
+      #############################################
+      # Widget-Sensor: Batterie + Reichweite kompakt
+      # Zeigt z.B. "72% · 310 km" – ideal für
+      # iPhone Widget und Apple Watch Komplikation
+      #############################################
+      - name: "Polestar – Batterie & Reichweite"
+        unique_id: polestar_batterie_reichweite
+        icon: mdi:car-electric
+        state: >
+          {% set bat = states('sensor.polestar_6877_battery_charge_level') | int(0) %}
+          {% set rng = states('sensor.polestar_6877_estimated_range') | int(0) %}
+          {{ bat }}% · {{ rng }} km
+
+      #############################################
+      # Widget-Sensor: Kilometerstand formatiert
+      # Zeigt z.B. "12.450 km"
+      #############################################
+      - name: "Polestar – Kilometerstand"
+        unique_id: polestar_km_formatiert
+        icon: mdi:counter
+        unit_of_measurement: "km"
+        state: >
+          {{ states('sensor.polestar_6877_current_odometer') | int(0) }}
+
+
+#######################
+# Scripts
+#######################
+
+script:
+
+  #############################################
+  # Polestar Status Push – manuell auslösbar
+  # Kann als iPhone Widget-Button oder
+  # Apple Watch Action genutzt werden
+  #############################################
+  polestar_status_push:
+    alias: Polestar – Status abrufen
+    description: >
+      Sendet aktuellen Polestar-Status als Push.
+      Ideal als iPhone Widget oder Watch-Action.
+    icon: mdi:car-info
+    mode: single
+    sequence:
+      - service: notify.mobile_app_iphone_15_pro_max_von_oliver
+        data:
+          title: "🚗 Polestar Status"
+          message: >
+            🔋 Batterie: {{ states('sensor.polestar_6877_battery_charge_level') }}%
+            🛣 Reichweite: {{ states('sensor.polestar_6877_estimated_range') }} km
+            📏 KM-Stand: {{ states('sensor.polestar_6877_current_odometer') | int(0) }} km
+            ⚡ Lädt: {{ 'Ja' if is_state('binary_sensor.polestar_charging_active', 'on') else 'Nein' }}
+            🔧 Service in: {{ states('sensor.polestar_service_in') }}
+          data:
+            tag: polestar_status
+            group: polestar
+
+
 #######################
 # Automationen
 #######################
